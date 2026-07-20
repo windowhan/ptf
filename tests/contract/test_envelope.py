@@ -104,10 +104,35 @@ def test_supported_version_diagnostics_are_sorted_and_fail_closed() -> None:
         envelope(schema_version=True)
 
 
+@pytest.mark.parametrize("attempt_generation", [True, 1.0, 1.5])
+def test_direct_envelope_rejects_non_integer_attempt_generation(
+    attempt_generation: object,
+) -> None:
+    with pytest.raises(ValueError, match="positive integer"):
+        replace(envelope(), attempt_generation=cast(Any, attempt_generation))
+
+
+def test_direct_envelope_rejects_non_string_json_mapping_keys() -> None:
+    with pytest.raises(TypeError, match="payload keys must be strings"):
+        envelope(payload=cast(dict[str, JsonValue], {1: "top-level"}))
+    with pytest.raises(TypeError, match="payload keys must be strings"):
+        envelope(payload=cast(dict[str, JsonValue], {"nested": {1: "invalid"}}))
+    with pytest.raises(ValueError, match="trace_context must be a string mapping"):
+        replace(envelope(), trace_context=cast(dict[str, str], {1: "invalid"}))
+
+
 @pytest.mark.parametrize("encoded", ["[]", '"scalar"', "null"])
 def test_envelope_json_requires_an_object(encoded: str) -> None:
     with pytest.raises(ValueError, match="must contain an object"):
         VersionedEnvelope.from_json(encoded)
+
+
+def test_envelope_dict_rejects_non_string_root_keys_before_field_access() -> None:
+    value = cast(dict[object, JsonValue], envelope().to_dict())
+    value[1] = "invalid"
+
+    with pytest.raises(TypeError, match="envelope keys must be strings"):
+        VersionedEnvelope.from_dict(cast(Any, value))
 
 
 @pytest.mark.parametrize(

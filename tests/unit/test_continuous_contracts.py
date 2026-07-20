@@ -2,16 +2,22 @@
 
 from __future__ import annotations
 
+import asyncio
+from collections.abc import Sequence
 from typing import cast
 
 import pytest
 
 from distributed_runtime.continuous import (
+    ContinuousWorkload,
     EventSink,
     LeaseHandle,
     Partition,
     PartitionContext,
+    PartitionHandler,
     SinkGuarantee,
+    SinkRegistry,
+    discover_partitions,
 )
 from distributed_runtime.core import (
     DeploymentId,
@@ -20,6 +26,7 @@ from distributed_runtime.core import (
     RuntimeInstanceId,
     VersionedEnvelope,
     WorkloadId,
+    WorkloadMode,
 )
 
 
@@ -170,3 +177,131 @@ class RecordingRegistry:
         if name != "events":
             raise KeyError(name)
         return self.sink
+
+
+def test_sink_protocols_are_structural() -> None:
+    sink: EventSink = RecordingSink()
+    registry: SinkRegistry = RecordingRegistry()
+
+    assert isinstance(sink, EventSink)
+    assert isinstance(registry, SinkRegistry)
+    assert sink.guarantee is SinkGuarantee.RUNTIME_FENCED
+    direct = RecordingSink(SinkGuarantee.REDUCED_DIRECT)
+    assert direct.guarantee is SinkGuarantee.REDUCED_DIRECT
+
+
+def test_context_emit_forwards_stable_id_and_lease() -> None:
+    async def exercise() -> RecordingSink:
+        registry = RecordingRegistry()
+        partition = make_partition()
+        context = PartitionContext(
+            workload_id=WorkloadId("stream"),
+            partition=partition,
+            lease=make_lease(),
+            sinks=registry,
+        )
+        event = make_event({"sequence": 1})
+        await context.emit("events", event, stable_id="partition:0/sequence:1")
+        return registry.sink
+
+    sink = asyncio.run(exercise())
+
+    assert len(sink.events) == 1
+    stable_id, event, lease = sink.events[0]
+    assert stable_id == "partition:0/sequence:1"
+    assert event.payload is not None
+    assert event.payload["sequence"] == 1
+    assert lease.fencing_token == 7
+
+
+class ExampleWorkload:
+    name = "example.stream"
+    version = "1"
+    mode = WorkloadMode.CONTINUOUS
+
+    async def discover_partitions(self) -> Sequence[Partition]:
+        return [make_partition()]
+
+    async def run_partition(
+        self,
+        context: PartitionContext,
+        partition: Partition,
+    ) -> None:
+        await context.emit(
+            "events",
+            make_event({"partition_id": str(partition.partition_id)}),
+            stable_id=f"{partition.partition_id}/started",
+        )
+
+
+class ExampleHandler:
+    async def run(
+        self,
+        context: PartitionContext,
+        partition: Partition,
+    ) -> None:
+        await context.emit(
+            "events",
+            make_event({"partition_id": str(partition.partition_id)}),
+            stable_id=f"{partition.partition_id}/handled",
+        )
+
+
+def test_workload_and_handler_contract_end_to_end() -> None:
+    async def exercise() -> RecordingSink:
+        workload = ExampleWorkload()
+        workload_contract: ContinuousWorkload = workload
+        handler_contract: PartitionHandler = ExampleHandler()
+        partitions = await workload_contract.discover_partitions()
+        registry = RecordingRegistry()
+        context = PartitionContext(
+            workload_id=WorkloadId(workload.name),
+            partition=partitions[0],
+            lease=make_lease(),
+            sinks=registry,
+        )
+        await workload_contract.run_partition(context, partitions[0])
+        await handler_contract.run(context, partitions[0])
+        return registry.sink
+
+    sink = asyncio.run(exercise())
+
+    assert [item[0] for item in sink.events] == [
+        "partition:0/started",
+        "partition:0/handled",
+    ]
+
+
+def test_discovery_is_normalized_and_rejects_duplicate_partition_ids() -> None:
+    class Discovery:
+        name = "example.stream"
+        version = "1"
+        mode = WorkloadMode.CONTINUOUS
+
+        async def discover_partitions(self) -> Sequence[Partition]:
+            return [
+                Partition(PartitionId("partition:2"), {}),
+                Partition(PartitionId("partition:1"), {}),
+            ]
+
+        async def run_partition(
+            self,
+            context: PartitionContext,
+            partition: Partition,
+        ) -> None:
+            del context, partition
+
+    workload = Discovery()
+    normalized = asyncio.run(discover_partitions(workload))
+    assert [str(partition.partition_id) for partition in normalized] == [
+        "partition:1",
+        "partition:2",
+    ]
+
+    class DuplicateDiscovery(Discovery):
+        async def discover_partitions(self) -> Sequence[Partition]:
+            partition = make_partition()
+            return [partition, partition]
+
+    with pytest.raises(ValueError, match="duplicate partition_id"):
+        asyncio.run(discover_partitions(DuplicateDiscovery()))

@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
+import asyncio
+from collections.abc import Mapping
 from datetime import UTC, datetime
+from typing import cast
 
 import pytest
 
@@ -12,6 +15,8 @@ from distributed_runtime.core import (
     Deadline,
     FakeClock,
     GracefulShutdown,
+    LogContext,
+    LogValue,
     ShutdownPhase,
 )
 
@@ -160,3 +165,54 @@ def test_graceful_shutdown_can_finish_before_deadline() -> None:
     assert shutdown.cancellation.token.reason == "work completed"
     with pytest.raises(RuntimeError, match="cannot begin"):
         shutdown.begin(1)
+
+
+def test_log_bindings_are_immutable_nested_and_exception_safe() -> None:
+    root = LogContext({"service": "worker"})
+    run = root.bind(run_id="run-1")
+    sibling = root.bind(run_id="run-2")
+
+    with run.activate():
+        assert LogContext().as_dict("started") == {
+            "service": "worker",
+            "run_id": "run-1",
+            "event": "started",
+        }
+        with (
+            pytest.raises(RuntimeError),
+            LogContext({"execution_id": "execution-1"}).activate(),
+        ):
+            raise RuntimeError("handler failed")
+        assert LogContext().as_dict("resumed")["run_id"] == "run-1"
+
+    assert root.fields == {"service": "worker"}
+    assert sibling.fields["run_id"] == "run-2"
+    assert LogContext().as_dict("idle") == {"event": "idle"}
+
+
+def test_contextvar_log_bindings_are_isolated_between_async_tasks() -> None:
+    async def record(run_id: str) -> Mapping[str, object]:
+        with LogContext({"run_id": run_id}).activate():
+            await asyncio.sleep(0)
+            return LogContext().as_dict("handled")
+
+    async def gather() -> list[Mapping[str, object]]:
+        return list(await asyncio.gather(record("run-1"), record("run-2")))
+
+    assert asyncio.run(gather()) == [
+        {"run_id": "run-1", "event": "handled"},
+        {"run_id": "run-2", "event": "handled"},
+    ]
+
+
+def test_log_fields_reject_reserved_or_empty_names() -> None:
+    with pytest.raises(ValueError, match="not 'event'"):
+        LogContext({"event": "collision"})
+    with pytest.raises(ValueError, match="non-empty"):
+        LogContext({"": "missing"})
+    with pytest.raises(ValueError, match="must be strings"):
+        LogContext(cast(Mapping[str, LogValue], {1: "invalid"}))
+    with pytest.raises(ValueError, match="exact JSON scalars"):
+        LogContext(cast(Mapping[str, LogValue], {"items": []}))
+    with pytest.raises(ValueError, match="finite JSON numbers"):
+        LogContext({"value": float("nan")})

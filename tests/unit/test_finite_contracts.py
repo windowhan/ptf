@@ -12,14 +12,19 @@ import pytest
 from distributed_runtime.core import (
     CancellationError,
     CancellationSource,
+    ExecutionId,
     JsonValue,
     PlanningDriftError,
     RevisionId,
     RunId,
     WorkloadId,
+    WorkloadMode,
 )
 from distributed_runtime.finite import (
+    ExecutionContext,
+    ExecutionResult,
     ExecutionUnit,
+    FiniteHandler,
     FinitePlanner,
     PlanningRecord,
     WorkloadRequest,
@@ -233,8 +238,76 @@ def test_finite_integer_boundaries_reject_floats(
         factory(value)
 
 
+def test_context_validates_attempt_and_freezes_metadata() -> None:
+    metadata = {"trace_id": "trace-1"}
+    context = ExecutionContext(
+        run_id=RunId("run:1"),
+        execution_id=ExecutionId("execution:1"),
+        attempt=2,
+        idempotency_key="item:A",
+        metadata=metadata,
+    )
+    metadata["trace_id"] = "changed"
+
+    assert context.metadata == {"trace_id": "trace-1"}
+    with pytest.raises(ValueError, match="attempt"):
+        ExecutionContext(
+            run_id=context.run_id,
+            execution_id=context.execution_id,
+            attempt=0,
+            idempotency_key=context.idempotency_key,
+        )
+    with pytest.raises(ValueError, match="attempt"):
+        replace(context, attempt=cast(Any, 1.0))
+
+
 async def planner(request: WorkloadRequest) -> AsyncIterator[ExecutionUnit]:
     items = cast(tuple[object, ...], request.payload["items"])
     for item in items:
         assert isinstance(item, str)
         yield make_unit(unit_key=f"item:{item}", payload={"item_id": item})
+
+
+class DeclaredPlanner:
+    name = "snapshot"
+    version = "1.0.0"
+    mode = WorkloadMode.FINITE
+
+    def __call__(self, request: WorkloadRequest) -> AsyncIterator[ExecutionUnit]:
+        return planner(request)
+
+
+async def handler(
+    context: ExecutionContext,
+    payload: Mapping[str, JsonValue],
+) -> ExecutionResult:
+    return {
+        "execution_id": str(context.execution_id),
+        "item_id": payload["item_id"],
+    }
+
+
+def test_protocols_accept_structurally_typed_callables() -> None:
+    planner_contract: FinitePlanner = DeclaredPlanner()
+    handler_contract: FiniteHandler = handler
+
+    assert isinstance(planner_contract, FinitePlanner)
+    assert isinstance(handler_contract, FiniteHandler)
+
+
+def test_planner_and_handler_contract_end_to_end() -> None:
+    async def exercise() -> tuple[list[ExecutionUnit], ExecutionResult]:
+        request = make_request()
+        units = [unit async for unit in planner(request)]
+        context = ExecutionContext(
+            run_id=request.run_id,
+            execution_id=ExecutionId("execution:1"),
+            attempt=1,
+            idempotency_key=units[0].idempotency_key or units[0].unit_key,
+        )
+        return units, await handler(context, units[0].payload)
+
+    units, result = asyncio.run(exercise())
+
+    assert [unit.unit_key for unit in units] == ["item:A", "item:B"]
+    assert result == {"execution_id": "execution:1", "item_id": "A"}
