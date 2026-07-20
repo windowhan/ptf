@@ -1,0 +1,36 @@
+# Local agent and orchestration state
+.omc/
+.omx/
+
+# Python bytecode and tool caches
+__pycache__/
+*.py[cod]
+.mypy_cache/
+.nox/
+.pytest_cache/
+.ruff_cache/
+.tox/
+
+# Test and coverage output
+.coverage
+.coverage.*
+coverage.xml
+htmlcov/
+
+# Build and packaging output
+build/
+dist/
+.eggs/
+*.egg-info/
+
+# Virtual environments and local configuration
+.env
+.env.*
+!.env.example
+.venv/
+venv/
+
+# Editors and operating systems
+.DS_Store
+.idea/
+.vscode/
