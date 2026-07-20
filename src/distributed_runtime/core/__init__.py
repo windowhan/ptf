@@ -1,40 +1,41 @@
-"""Public foundational contracts."""
+"""Core identifiers, states, and failure semantics."""
 
+from distributed_runtime.core.artifacts import ArtifactReference
 from distributed_runtime.core.enums import (
-    DeploymentStatus,
     ErrorKind,
     ExecutionStatus,
     PartitionStatus,
     RunStatus,
     WorkloadMode,
 )
-from distributed_runtime.core.errors import InvalidIdentifierError, RuntimeContractError
-from distributed_runtime.core.identifiers import (
-    ArtifactId,
-    DeploymentId,
-    ExecutionId,
-    PartitionId,
-    RevisionId,
-    RunId,
-    RuntimeInstanceId,
-    WorkloadId,
+from distributed_runtime.core.errors import (
+    CancelledExecutionError,
+    InvalidIdentifierError,
+    InvariantViolationError,
+    PermanentExecutionError,
+    PlanningDriftError,
+    RateLimitedExecutionError,
+    RetryableExecutionError,
+    RuntimeContractError,
 )
+from distributed_runtime.core.identifiers import ExecutionId, RunId, WorkloadId
 
 __all__ = [
-    "ArtifactId",
-    "DeploymentId",
-    "DeploymentStatus",
+    "ArtifactReference",
+    "CancelledExecutionError",
     "ErrorKind",
     "ExecutionId",
     "ExecutionStatus",
     "InvalidIdentifierError",
-    "PartitionId",
+    "InvariantViolationError",
     "PartitionStatus",
-    "RevisionId",
+    "PermanentExecutionError",
+    "PlanningDriftError",
+    "RateLimitedExecutionError",
+    "RetryableExecutionError",
     "RunId",
     "RunStatus",
     "RuntimeContractError",
-    "RuntimeInstanceId",
     "WorkloadId",
     "WorkloadMode",
 ]
