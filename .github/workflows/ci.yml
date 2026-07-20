@@ -1,0 +1,72 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+
+permissions:
+  contents: read
+
+jobs:
+  checks:
+    name: Python ${{ matrix.python-version }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version:
+          - "3.12"
+          - "3.13"
+          - "3.14"
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v7
+
+      - name: Install uv and Python
+        uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b # v8.1.0
+        with:
+          enable-cache: true
+          python-version: ${{ matrix.python-version }}
+
+      - name: Install project and development tools
+        run: uv sync --all-groups
+
+      - name: Lint
+        run: uv run ruff check .
+
+      - name: Check formatting
+        run: uv run ruff format --check .
+
+      - name: Type-check
+        run: uv run mypy --strict src tests
+
+      - name: Test with branch coverage
+        run: |
+          uv run coverage run --branch -m pytest
+          uv run coverage report --fail-under=90
+
+      - name: Build distributions
+        run: uv build
+
+      - name: Inspect wheel metadata
+        run: |
+          unzip -p dist/*.whl '*/METADATA' | grep -Fx 'Name: distributed-runtime'
+          unzip -p dist/*.whl '*/METADATA' | grep -Fx 'Provides-Extra: gcp'
+          unzip -p dist/*.whl '*/METADATA' | grep -Fx 'Provides-Extra: testing'
+
+      - name: Smoke-test installed wheel
+        run: |
+          uv venv --python "${{ matrix.python-version }}" .venv-wheel
+          uv pip install --python .venv-wheel/bin/python dist/*.whl
+          .venv-wheel/bin/python - <<'PY'
+          import sys
+
+          import distributed_runtime
+          import distributed_runtime.gcp
+
+          loaded_google_modules = {
+              name for name in sys.modules if name == "google" or name.startswith("google.")
+          }
+          assert loaded_google_modules == set()
+          PY
