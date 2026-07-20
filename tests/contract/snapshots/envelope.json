@@ -1,0 +1,44 @@
+{
+  "canonical_json": "{\"application\":\"example\",\"attempt_generation\":2,\"execution_class\":\"default\",\"execution_id\":\"execution:1\",\"handler\":\"snapshot\",\"idempotency_key\":\"execution:1\",\"message_kind\":\"finite.execute\",\"payload\":{\"enabled\":true,\"items\":[1,\"two\",null],\"nested\":{\"answer\":42}},\"published_at\":\"2026-07-20T04:00:00Z\",\"run_id\":\"run:1\",\"runtime_pool_revision\":\"finite:v2\",\"schema_version\":1,\"trace_context\":{\"traceparent\":\"trace-7\"},\"workload\":\"snapshot\",\"workload_version\":\"1.0.0\"}",
+  "mapping": {
+    "application": "example",
+    "attempt_generation": 2,
+    "execution_class": "default",
+    "execution_id": "execution:1",
+    "handler": "snapshot",
+    "idempotency_key": "execution:1",
+    "message_kind": "finite.execute",
+    "payload": {
+      "enabled": true,
+      "items": [
+        1,
+        "two",
+        null
+      ],
+      "nested": {
+        "answer": 42
+      }
+    },
+    "published_at": "2026-07-20T04:00:00Z",
+    "run_id": "run:1",
+    "runtime_pool_revision": "finite:v2",
+    "schema_version": 1,
+    "trace_context": {
+      "traceparent": "trace-7"
+    },
+    "workload": "snapshot",
+    "workload_version": "1.0.0"
+  },
+  "unsupported_version_error": {
+    "code": "unsupported_version",
+    "details": {
+      "schema_version": 2,
+      "supported_versions": [
+        1
+      ]
+    },
+    "kind": "unsupported_version",
+    "message": "unsupported envelope schema version: 2",
+    "retryable": false
+  }
+}

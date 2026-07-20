@@ -194,3 +194,69 @@ def test_application_and_registry_validate_names() -> None:
             planner=cast(FinitePlanner, Planner()),
             handler=cast(FiniteHandler, handler),
         )
+
+
+@pytest.mark.parametrize(
+    "version",
+    [
+        "01.0.0",
+        "1.01.0",
+        "1.0.01",
+        "1.0.0-01",
+        "1.0.0-001",
+        "1.0.0-alpha..1",
+        "1.0.0-alpha_1",
+        "1\u0661.0.0",
+        "1.2\u0662.0",
+        "1.2.3\u0663",
+        "1.2.3-1\u0661",
+        "1.2.3-alpha.1\u0661",
+    ],
+)
+def test_registry_rejects_invalid_semantic_versions(version: str) -> None:
+    app = RuntimeApplication("example")
+    with pytest.raises(RegistrationError, match="semantic_version"):
+        app.registry.register_finite(
+            name="finite",
+            semantic_version=version,
+            execution_class="default",
+            planner=cast(FinitePlanner, Planner("finite", version)),
+            handler=cast(FiniteHandler, handler),
+        )
+
+
+@pytest.mark.parametrize(
+    "version",
+    [
+        "0.0.0",
+        "1.0.0-alpha",
+        "1.0.0-alpha.1",
+        "1.0.0-1a",
+        "1.0.0-0alpha",
+        "1.0.0-01a",
+        "1.0.0+build.1",
+        "1.0.0-alpha+build.1",
+    ],
+)
+def test_registry_accepts_semver_two_versions(version: str) -> None:
+    app = RuntimeApplication("example")
+    registration = app.registry.register_finite(
+        name="finite",
+        semantic_version=version,
+        execution_class="default",
+        planner=cast(FinitePlanner, Planner("finite", version)),
+        handler=cast(FiniteHandler, handler),
+    )
+
+    assert registration.semantic_version == version
+
+
+def test_registration_must_match_workload_declaration() -> None:
+    app = RuntimeApplication("example")
+    with pytest.raises(RegistrationError, match="does not match"):
+        app.registry.register_continuous(
+            name="different",
+            semantic_version="1.0.0",
+            execution_class="stateful",
+            workload=Stream(),
+        )

@@ -1,0 +1,193 @@
+{
+  "continuous_exports": [
+    "ContinuousWorkload",
+    "EventSink",
+    "LeaseHandle",
+    "Partition",
+    "PartitionContext",
+    "PartitionHandler",
+    "SinkGuarantee",
+    "SinkRegistry",
+    "discover_partitions"
+  ],
+  "core_exports": [
+    "ArtifactId",
+    "ArtifactReference",
+    "CancellationError",
+    "CancellationSource",
+    "CancellationToken",
+    "CancelledExecutionError",
+    "Clock",
+    "ConnectionCapacity",
+    "ContinuousPolicy",
+    "DatabaseCapacity",
+    "Deadline",
+    "DeploymentId",
+    "DeploymentStatus",
+    "ErrorKind",
+    "ExecutionClassConfig",
+    "ExecutionId",
+    "ExecutionStatus",
+    "FakeClock",
+    "FinitePolicy",
+    "GracefulShutdown",
+    "InvalidIdentifierError",
+    "InvariantViolationError",
+    "JsonValue",
+    "LogContext",
+    "LogValue",
+    "PartitionId",
+    "PartitionStatus",
+    "PermanentExecutionError",
+    "PlanningDriftError",
+    "RateLimitedExecutionError",
+    "RetryableExecutionError",
+    "RevisionId",
+    "RunId",
+    "RunStatus",
+    "RuntimeConfig",
+    "RuntimeContractError",
+    "RuntimeInstanceId",
+    "RuntimePoolConfig",
+    "SecretReference",
+    "ShutdownPhase",
+    "SystemClock",
+    "UnsupportedVersionError",
+    "VersionedEnvelope",
+    "WorkloadId",
+    "WorkloadMode"
+  ],
+  "finite_exports": [
+    "ExecutionContext",
+    "ExecutionResult",
+    "ExecutionUnit",
+    "FiniteHandler",
+    "FinitePlanner",
+    "PlanningRecord",
+    "WorkloadRequest",
+    "validate_plan"
+  ],
+  "registry_methods": {
+    "register_continuous": [
+      {
+        "kind": "POSITIONAL_OR_KEYWORD",
+        "name": "self",
+        "required": true
+      },
+      {
+        "kind": "KEYWORD_ONLY",
+        "name": "name",
+        "required": true
+      },
+      {
+        "kind": "KEYWORD_ONLY",
+        "name": "semantic_version",
+        "required": true
+      },
+      {
+        "kind": "KEYWORD_ONLY",
+        "name": "execution_class",
+        "required": true
+      },
+      {
+        "kind": "KEYWORD_ONLY",
+        "name": "workload",
+        "required": true
+      }
+    ],
+    "register_finite": [
+      {
+        "kind": "POSITIONAL_OR_KEYWORD",
+        "name": "self",
+        "required": true
+      },
+      {
+        "kind": "KEYWORD_ONLY",
+        "name": "name",
+        "required": true
+      },
+      {
+        "kind": "KEYWORD_ONLY",
+        "name": "semantic_version",
+        "required": true
+      },
+      {
+        "kind": "KEYWORD_ONLY",
+        "name": "execution_class",
+        "required": true
+      },
+      {
+        "kind": "KEYWORD_ONLY",
+        "name": "planner",
+        "required": true
+      },
+      {
+        "kind": "KEYWORD_ONLY",
+        "name": "handler",
+        "required": true
+      }
+    ],
+    "register_sink": [
+      {
+        "kind": "POSITIONAL_OR_KEYWORD",
+        "name": "self",
+        "required": true
+      },
+      {
+        "kind": "POSITIONAL_OR_KEYWORD",
+        "name": "name",
+        "required": true
+      },
+      {
+        "kind": "POSITIONAL_OR_KEYWORD",
+        "name": "sink",
+        "required": true
+      }
+    ],
+    "sink": [
+      {
+        "kind": "POSITIONAL_OR_KEYWORD",
+        "name": "self",
+        "required": true
+      },
+      {
+        "kind": "POSITIONAL_OR_KEYWORD",
+        "name": "name",
+        "required": true
+      }
+    ],
+    "workload": [
+      {
+        "kind": "POSITIONAL_OR_KEYWORD",
+        "name": "self",
+        "required": true
+      },
+      {
+        "kind": "POSITIONAL_OR_KEYWORD",
+        "name": "name",
+        "required": true
+      },
+      {
+        "kind": "POSITIONAL_OR_KEYWORD",
+        "name": "semantic_version",
+        "required": true
+      },
+      {
+        "kind": "POSITIONAL_OR_KEYWORD",
+        "name": "mode",
+        "required": true
+      }
+    ],
+    "workloads": [
+      {
+        "kind": "POSITIONAL_OR_KEYWORD",
+        "name": "self",
+        "required": true
+      }
+    ]
+  },
+  "root_exports": [
+    "RuntimeApplication",
+    "__version__"
+  ]
+}
