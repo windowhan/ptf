@@ -21,16 +21,32 @@ from distributed_runtime.core.errors import (
     UnsupportedVersionError,
 )
 from distributed_runtime.core.identifiers import ExecutionId, RunId, WorkloadId
+from distributed_runtime.core.lifecycle import (
+    CancellationError,
+    CancellationSource,
+    Deadline,
+    FakeClock,
+    GracefulShutdown,
+    ShutdownPhase,
+)
+from distributed_runtime.core.logging import LogContext, LogValue
 
 __all__ = [
     "ArtifactReference",
+    "CancellationError",
+    "CancellationSource",
     "CancelledExecutionError",
+    "Deadline",
     "ErrorKind",
     "ExecutionId",
     "ExecutionStatus",
+    "FakeClock",
+    "GracefulShutdown",
     "InvalidIdentifierError",
     "InvariantViolationError",
     "JsonValue",
+    "LogContext",
+    "LogValue",
     "PartitionStatus",
     "PermanentExecutionError",
     "PlanningDriftError",
@@ -39,6 +55,7 @@ __all__ = [
     "RunId",
     "RunStatus",
     "RuntimeContractError",
+    "ShutdownPhase",
     "UnsupportedVersionError",
     "VersionedEnvelope",
     "WorkloadId",
