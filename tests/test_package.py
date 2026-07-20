@@ -9,7 +9,7 @@ from pathlib import Path
 
 import distributed_runtime
 
-EXPECTED_SUBPACKAGES = {"control", "core", "gcp", "testing", "worker"}
+EXPECTED_SUBPACKAGES = {"control", "core", "finite", "gcp", "testing", "worker"}
 
 
 def test_distribution_metadata_matches_runtime_version() -> None:
