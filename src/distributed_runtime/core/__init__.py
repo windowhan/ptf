@@ -8,6 +8,7 @@ from distributed_runtime.core.enums import (
     RunStatus,
     WorkloadMode,
 )
+from distributed_runtime.core.envelope import JsonValue, VersionedEnvelope
 from distributed_runtime.core.errors import (
     CancelledExecutionError,
     InvalidIdentifierError,
@@ -17,6 +18,7 @@ from distributed_runtime.core.errors import (
     RateLimitedExecutionError,
     RetryableExecutionError,
     RuntimeContractError,
+    UnsupportedVersionError,
 )
 from distributed_runtime.core.identifiers import ExecutionId, RunId, WorkloadId
 
@@ -28,6 +30,7 @@ __all__ = [
     "ExecutionStatus",
     "InvalidIdentifierError",
     "InvariantViolationError",
+    "JsonValue",
     "PartitionStatus",
     "PermanentExecutionError",
     "PlanningDriftError",
@@ -36,6 +39,8 @@ __all__ = [
     "RunId",
     "RunStatus",
     "RuntimeContractError",
+    "UnsupportedVersionError",
+    "VersionedEnvelope",
     "WorkloadId",
     "WorkloadMode",
 ]
