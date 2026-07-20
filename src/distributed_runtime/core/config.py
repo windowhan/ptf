@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from collections.abc import Mapping
+from dataclasses import dataclass, field
 from math import floor
+from types import MappingProxyType
 
 from distributed_runtime.core.enums import WorkloadMode
 from distributed_runtime.core.errors import RuntimeContractError
@@ -201,6 +203,65 @@ class ConnectionCapacity:
     @property
     def is_safe(self) -> bool:
         return self.remaining >= 0
+
+
+@dataclass(frozen=True, slots=True)
+class RuntimeConfig:
+    """Validated top-level configuration shared by runtime adapters."""
+
+    runtime_pools: Mapping[str, RuntimePoolConfig]
+    execution_classes: Mapping[str, ExecutionClassConfig]
+    database: DatabaseCapacity
+    finite: FinitePolicy = field(default_factory=FinitePolicy)
+    continuous: ContinuousPolicy = field(default_factory=ContinuousPolicy)
+
+    def __post_init__(self) -> None:
+        pools = dict(self.runtime_pools)
+        execution_classes = dict(self.execution_classes)
+        if not pools:
+            raise ConfigurationError("at least one runtime pool is required")
+        for name in pools:
+            _require_name("runtime pool name", name)
+        for name, execution_class in execution_classes.items():
+            _require_name("execution class name", name)
+            if execution_class.runtime_pool not in pools:
+                raise ConfigurationError(
+                    f"execution class {name!r} references unknown pool "
+                    f"{execution_class.runtime_pool!r}"
+                )
+            pool = pools[execution_class.runtime_pool]
+            if pool.mode is WorkloadMode.FINITE and execution_class.queue is None:
+                raise ConfigurationError(
+                    f"finite execution class {name!r} requires a queue/subscription"
+                )
+            if pool.mode is WorkloadMode.CONTINUOUS and execution_class.queue is not None:
+                raise ConfigurationError(
+                    f"continuous execution class {name!r} must not set a finite queue/subscription"
+                )
+        object.__setattr__(self, "runtime_pools", MappingProxyType(pools))
+        object.__setattr__(
+            self,
+            "execution_classes",
+            MappingProxyType(execution_classes),
+        )
+        capacity = self.connection_capacity()
+        if not capacity.is_safe:
+            raise ConfigurationError(
+                "worst-case database connection demand exceeds safe budget",
+                details={
+                    "budget": capacity.budget,
+                    "total_demand": capacity.total_demand,
+                    "over_capacity_by": -capacity.remaining,
+                },
+            )
+
+    def connection_capacity(self) -> ConnectionCapacity:
+        """Calculate the maximum demand implied by autoscaling settings."""
+        return ConnectionCapacity(
+            budget=self.database.runtime_budget,
+            fixed_demand=self.database.fixed_service_connections,
+            pool_demand=sum(pool.worst_case_connections for pool in self.runtime_pools.values()),
+        )
 
 
 def _require_positive(name: str, value: int) -> None:

@@ -1,0 +1,64 @@
+{
+  "capacity": {
+    "budget": 56,
+    "fixed_demand": 6,
+    "is_safe": true,
+    "pool_demand": 40,
+    "remaining": 10,
+    "total_demand": 46
+  },
+  "continuous_defaults": {
+    "drain_seconds": 120,
+    "heartbeat_seconds": 15,
+    "lease_seconds": 60,
+    "reconcile_seconds": 60,
+    "renew_before_expiry_seconds": 30,
+    "takeover_seconds": 150
+  },
+  "database": {
+    "fixed_service_connections": 6,
+    "max_connections": 100,
+    "reserved_connections": 20,
+    "runtime_budget": 56,
+    "utilization_limit": 0.7
+  },
+  "execution_classes": {
+    "default": {
+      "queue": "finite-default",
+      "runtime_pool": "finite"
+    },
+    "stateful": {
+      "queue": null,
+      "runtime_pool": "continuous"
+    }
+  },
+  "finite_defaults": {
+    "claim_grace_seconds": 120,
+    "claim_ttl_seconds": 420,
+    "max_attempts": 5,
+    "max_timeout_seconds": 3600,
+    "retry_base_seconds": 5,
+    "retry_cap_seconds": 300,
+    "timeout_seconds": 300
+  },
+  "runtime_pools": {
+    "continuous": {
+      "connections_per_replica": 5,
+      "max_replicas": 4,
+      "min_replicas": 2,
+      "mode": "continuous",
+      "target_cpu_utilization": 0.65,
+      "target_messages_per_instance": null,
+      "worst_case_connections": 20
+    },
+    "finite": {
+      "connections_per_replica": 4,
+      "max_replicas": 5,
+      "min_replicas": 0,
+      "mode": "finite",
+      "target_cpu_utilization": null,
+      "target_messages_per_instance": 20,
+      "worst_case_connections": 20
+    }
+  }
+}

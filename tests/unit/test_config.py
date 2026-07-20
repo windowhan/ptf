@@ -6,11 +6,11 @@ import pytest
 
 from distributed_runtime.core.config import (
     ConfigurationError,
-    ConnectionCapacity,
     ContinuousPolicy,
     DatabaseCapacity,
     ExecutionClassConfig,
     FinitePolicy,
+    RuntimeConfig,
     RuntimePoolConfig,
     SecretReference,
 )
@@ -117,32 +117,148 @@ def test_integer_fields_reject_booleans_and_fractions(value: object) -> None:
         DatabaseCapacity(max_connections=value)  # type: ignore[arg-type]
 
 
+def test_execution_class_queue_rules_follow_pool_mode() -> None:
+    database = DatabaseCapacity(max_connections=100)
+    with pytest.raises(ConfigurationError, match=r"finite.*requires.*queue/subscription"):
+        RuntimeConfig(
+            runtime_pools={"finite": finite_pool(max_replicas=1)},
+            execution_classes={"default": ExecutionClassConfig(runtime_pool="finite")},
+            database=database,
+        )
+    with pytest.raises(
+        ConfigurationError,
+        match=r"continuous.*must not set.*queue/subscription",
+    ):
+        RuntimeConfig(
+            runtime_pools={"continuous": continuous_pool(max_replicas=2)},
+            execution_classes={
+                "stream": ExecutionClassConfig(
+                    runtime_pool="continuous",
+                    queue="finite-only",
+                )
+            },
+            database=database,
+        )
+
+
 @pytest.mark.parametrize("version", ["latest", "", "0", "-1", "v1"])
 def test_secret_reference_requires_an_explicit_positive_version(version: str) -> None:
     with pytest.raises(ConfigurationError, match="explicit positive version"):
         SecretReference(project_id="runtime-project", secret_id="database", version=version)
-    reference = SecretReference("runtime-project", "database", "7")
-    assert reference.resource_name.endswith("/versions/7")
+
+    reference = SecretReference(
+        project_id="runtime-project",
+        secret_id="database",
+        version="7",
+    )
+    assert reference.resource_name == ("projects/runtime-project/secrets/database/versions/7")
 
 
-def test_execution_class_and_database_capacity_validate_boundaries() -> None:
-    with pytest.raises(ConfigurationError, match="runtime_pool"):
-        ExecutionClassConfig(runtime_pool="")
-    with pytest.raises(ConfigurationError, match="queue"):
-        ExecutionClassConfig(runtime_pool="finite", queue=" bad")
-    with pytest.raises(ConfigurationError, match="less than"):
-        DatabaseCapacity(max_connections=10, reserved_connections=10)
+def test_connection_capacity_accepts_demand_at_budget_boundary() -> None:
+    config = RuntimeConfig(
+        runtime_pools={
+            "finite": finite_pool(max_replicas=10, connections_per_replica=2),
+            "continuous": continuous_pool(
+                max_replicas=5,
+                connections_per_replica=2,
+            ),
+        },
+        execution_classes={
+            "browser": ExecutionClassConfig(
+                runtime_pool="finite",
+                queue="runtime-browser",
+            ),
+            "stream": ExecutionClassConfig(runtime_pool="continuous"),
+        },
+        database=DatabaseCapacity(
+            max_connections=100,
+            reserved_connections=10,
+            fixed_service_connections=32,
+        ),
+    )
+
+    capacity = config.connection_capacity()
+
+    assert capacity.budget == 62
+    assert capacity.pool_demand == 30
+    assert capacity.fixed_demand == 32
+    assert capacity.total_demand == 62
+    assert capacity.remaining == 0
+
+
+def test_connection_capacity_fails_closed_above_budget() -> None:
+    with pytest.raises(ConfigurationError, match="exceeds safe budget") as raised:
+        RuntimeConfig(
+            runtime_pools={"finite": finite_pool()},
+            execution_classes={},
+            database=DatabaseCapacity(
+                max_connections=100,
+                reserved_connections=10,
+                fixed_service_connections=23,
+            ),
+        )
+
+    assert raised.value.details == {
+        "budget": 62,
+        "total_demand": 63,
+        "over_capacity_by": 1,
+    }
+
+
+def test_connection_capacity_report_for_safe_configuration() -> None:
+    config = RuntimeConfig(
+        runtime_pools={
+            "finite": finite_pool(),
+            "continuous": continuous_pool(),
+        },
+        execution_classes={},
+        database=DatabaseCapacity(
+            max_connections=120,
+            reserved_connections=20,
+            fixed_service_connections=5,
+        ),
+    )
+
+    capacity = config.connection_capacity()
+
+    assert capacity.budget == 70
+    assert capacity.pool_demand == 60
+    assert capacity.total_demand == 65
+    assert capacity.remaining == 5
+    assert capacity.is_safe is True
+
+
+def test_configuration_copies_mappings_and_checks_references() -> None:
+    pools = {"finite": finite_pool(max_replicas=1)}
+    config = RuntimeConfig(
+        runtime_pools=pools,
+        execution_classes={
+            "default": ExecutionClassConfig(
+                runtime_pool="finite",
+                queue="runtime-default",
+            )
+        },
+        database=DatabaseCapacity(max_connections=20),
+    )
+    pools["late"] = finite_pool(max_replicas=1)
+
+    assert set(config.runtime_pools) == {"finite"}
+    with pytest.raises(TypeError):
+        config.runtime_pools["late"] = finite_pool()  # type: ignore[index]
+    with pytest.raises(ConfigurationError, match="unknown pool"):
+        RuntimeConfig(
+            runtime_pools={"finite": finite_pool(max_replicas=1)},
+            execution_classes={"broken": ExecutionClassConfig(runtime_pool="missing")},
+            database=DatabaseCapacity(max_connections=20),
+        )
+
+
+@pytest.mark.parametrize("utilization_limit", [0, -0.1, 0.71, 1.0])
+def test_database_capacity_enforces_seventy_percent_ceiling(
+    utilization_limit: float,
+) -> None:
     with pytest.raises(ConfigurationError, match=r"at most 0\.70"):
-        DatabaseCapacity(max_connections=10, utilization_limit=0.8)
-    database = DatabaseCapacity(max_connections=100, reserved_connections=10)
-    assert database.runtime_budget == 62
-
-
-def test_connection_capacity_reports_safe_and_unsafe_demand() -> None:
-    safe = ConnectionCapacity(budget=10, fixed_demand=4, pool_demand=6)
-    assert safe.total_demand == 10
-    assert safe.remaining == 0
-    assert safe.is_safe
-    unsafe = ConnectionCapacity(budget=9, fixed_demand=4, pool_demand=6)
-    assert unsafe.remaining == -1
-    assert not unsafe.is_safe
+        DatabaseCapacity(
+            max_connections=100,
+            utilization_limit=utilization_limit,
+        )
