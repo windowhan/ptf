@@ -1,6 +1,15 @@
 """Core identifiers, states, and failure semantics."""
 
 from distributed_runtime.core.artifacts import ArtifactReference
+from distributed_runtime.core.config import (
+    ConnectionCapacity,
+    ContinuousPolicy,
+    DatabaseCapacity,
+    ExecutionClassConfig,
+    FinitePolicy,
+    RuntimePoolConfig,
+    SecretReference,
+)
 from distributed_runtime.core.enums import (
     ErrorKind,
     ExecutionStatus,
@@ -36,11 +45,16 @@ __all__ = [
     "CancellationError",
     "CancellationSource",
     "CancelledExecutionError",
+    "ConnectionCapacity",
+    "ContinuousPolicy",
+    "DatabaseCapacity",
     "Deadline",
     "ErrorKind",
+    "ExecutionClassConfig",
     "ExecutionId",
     "ExecutionStatus",
     "FakeClock",
+    "FinitePolicy",
     "GracefulShutdown",
     "InvalidIdentifierError",
     "InvariantViolationError",
@@ -55,6 +69,8 @@ __all__ = [
     "RunId",
     "RunStatus",
     "RuntimeContractError",
+    "RuntimePoolConfig",
+    "SecretReference",
     "ShutdownPhase",
     "UnsupportedVersionError",
     "VersionedEnvelope",
