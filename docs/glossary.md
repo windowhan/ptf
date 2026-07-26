@@ -90,6 +90,7 @@ sink도 중복 호출을 안전하게 처리해야 한다.
 | autoscaling | 작업량에 따라 instance 수를 자동으로 늘리거나 줄이는 기능 |
 | scale-to-zero | 할 일이 없을 때 instance 수를 0으로 줄이는 동작 |
 | E2E | 요청부터 실제 처리 결과까지 전체 경로를 확인하는 End-to-End 검증 |
+| PITR | 특정 과거 시각의 DB 상태로 복구하는 Point-in-Time Recovery |
 
 ## Python과 API
 

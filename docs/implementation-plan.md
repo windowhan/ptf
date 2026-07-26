@@ -101,34 +101,39 @@ Emission outbox → dispatcher → external sink
 
 ### Finite
 
-- timeout 300초, 최대 3,600초
-- max attempts 5
-- retry 5초 base/300초 cap/full jitter
-- infra DLQ 20 delivery attempts
-- claim TTL = timeout + 120초
+- 실행 시도 timeout은 기본 300초, workload가 요청할 수 있는 최대값은 3,600초다.
+- 처음 실행을 포함해 최대 5번 시도한다.
+- 재시도 대기는 5초부터 늘리되 최대 300초다. 여러 worker가 동시에 다시 시작하지
+  않도록 실제 대기 시간은 범위 안에서 무작위로 정한다.
+- Pub/Sub 인프라 DLQ 기준은 delivery attempt 20회로 시작한다.
+- worker의 실행 권한은 timeout보다 120초 더 오래 유지한다.
 
 ### Continuous
 
-- heartbeat 15초, lease 60초, expiry 30초 전 renewal
-- reconcile 매분, drain 120초, takeover 150초
-- MIG min 2
+- worker는 15초마다 heartbeat를 보낸다.
+- lease는 60초 동안 유효하며 만료 30초 전부터 연장한다.
+- 상태 조정 작업은 1분마다 실행한다.
+- 종료할 때 진행 중인 일을 정리할 시간은 120초다.
+- 응답 없는 worker의 partition은 150초 뒤 다른 worker가 인수할 수 있다.
+- MIG worker는 최소 2개를 유지한다.
 
 ### Rebalance
 
-- ACTIVE/recent/compatible/non-draining instance만 후보
-- weighted load 최소 instance 우선
-- load 차이 <2면 sticky ownership
-- tick당 `min(10, ceil(partitions × 5%))` 이동
-- partition cooldown 10분
-- steady-state weighted load 차이 <=1
+- 현재 활성 상태이고 최근 heartbeat가 있으며 필요한 기능을 지원하는 worker만
+  후보로 사용한다. 종료 중인 worker는 제외한다.
+- 현재 맡은 partition의 전체 무게가 가장 작은 worker에 먼저 배정한다.
+- worker 사이의 무게 차이가 2보다 작으면 기존 owner를 유지한다.
+- 조정 작업 한 번에 최대 10개 또는 전체 partition의 5%만 이동한다.
+- 한 번 이동한 partition은 10분 동안 다시 이동하지 않는다.
+- 안정된 상태에서는 worker 사이의 전체 무게 차이를 1 이하로 맞춘다.
 
 ### Sink 장애
 
-- retry 5초 base/300초 cap
-- 100 attempts 또는 24시간 뒤 `FAILED`
-- 10,000 events 또는 256 MiB에서 backpressure
-- 60초 초과 시 `BLOCKED_SINK`
-- operator `:resume-sink` replay, stable emission ID 유지
+- 재시도 대기는 5초부터 늘리되 최대 300초다.
+- 100번 실패하거나 24시간이 지나면 `FAILED` 상태로 바꾼다.
+- 대기 중인 event가 10,000개 또는 256 MiB에 도달하면 새 처리를 제한한다.
+- 제한 상태가 60초 넘게 계속되면 partition을 `BLOCKED_SINK`로 표시한다.
+- 운영자가 `:resume-sink`를 호출하면 같은 event ID를 유지한 채 다시 전송한다.
 
 ## 5. Repository 목표
 
@@ -149,6 +154,21 @@ docs/runbooks/
 자동 생성 파일, lock file, 문서만 바꾼 커밋은 줄 수를 맞추려고 의미 없는 내용을
 추가하지 않는다. 범위를 벗어난 이유는 커밋 본문에 남긴다.
 
+Gate 약어:
+
+| 약어 | 뜻 |
+|---|---|
+| `UT` | 작은 클래스나 함수 하나를 확인하는 unit test |
+| `CT` | 공개 API와 메시지 형식을 확인하는 contract test |
+| `IT` | 여러 component를 함께 실행하는 integration test |
+| `FT` | 장애·재시도·복구 흐름을 확인하는 기능 테스트 |
+| `TF` | Terraform plan과 배포 설정 검사 |
+| `E2E` | 실제 GCP에서 요청부터 결과까지 확인하는 전체 경로 테스트 |
+| `RELEASE-GATE` | 배포 직전 보안·호환성·package 최종 검사 |
+
+`build`, `Ruff`, `mypy`는 각각 package build, lint, type check를 뜻한다. 아직 만들지
+않은 Gate의 정확한 명령과 테스트 파일은 해당 기능을 구현하는 커밋에서 함께 추가한다.
+
 | # | 변경 의도 | Gate |
 |---:|---|---|
 | 01 | package/quality/CI scaffold | build/Ruff/mypy |
@@ -165,7 +185,7 @@ docs/runbooks/
 | 12 | SQL engine/PG matrix | IT-SQL-BOOT |
 | 13 | migration runner/base | FT-MIGRATE-BASE |
 | 14 | run/planning schema | IT-PLAN-SQL |
-| 15 | durable planning repo | IT-PLAN-REPO |
+| 15 | 계획을 DB에 저장하는 repository | IT-PLAN-REPO |
 | 16 | unit/attempt schema | IT-SQL-FIN |
 | 17 | finite claim | IT-CLAIM |
 | 18 | at-least-once outbox | IT-OUTBOX-01 |

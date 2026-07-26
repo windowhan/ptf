@@ -47,7 +47,7 @@ sequenceDiagram
     participant R as Reconciler (후속 구현)
     participant W as ContinuousWorkload
     participant H as discover_partitions
-    participant D as Durable Store (후속 구현)
+    participant D as DB 저장소 (후속 구현)
 
     R->>H: workload
     H->>W: discover_partitions()
@@ -146,10 +146,12 @@ sink에 함께 전달한다. sink는 이 lease로 아직 쓰기 권한이 있는
 
 ### `RUNTIME_FENCED`
 
-runtime이 관리하는 DB 경로를 사용한다. 이벤트 ID와 fencing token을 모두 검사할 수
-있으므로 권한을 잃은 worker의 쓰기를 막을 수 있다.
+후속 sink가 runtime이 관리하는 DB 경로를 사용하고, 이벤트 ID와 fencing token을
+확인하겠다는 표시다.
 
-앞으로 만들 수 있는 예:
+현재 구현에는 `SinkGuarantee` 값과 `EventSink` 규칙만 있다. 실제 DB 쓰기와 오래된
+worker 차단 기능은 아직 없다. 아래 항목은 후속 구현이 이 보장을 제공하기 위해 필요한
+예다.
 
 - Cloud SQL outbox
 - 최신 token일 때만 저장하는 조건부 쓰기

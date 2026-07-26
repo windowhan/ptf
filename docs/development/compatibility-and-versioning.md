@@ -53,7 +53,7 @@ version에 모르는 선택 field가 추가된 경우에는 그 field만 무시�
 
 1. 기존 V1 메시지를 계속 읽을 수 있게 유지한다.
 2. 읽을 수 있는 version 목록에 새 값을 직접 추가한다.
-3. 새 메시지의 canonical JSON 기준 파일을 추가한다.
+3. 새 메시지의 정해진 JSON 형식 기준 파일을 추가한다.
 4. 이전 발행자와 새 수신자, 새 발행자와 이전 수신자 조합을 테스트한다.
 
 ## 실제 배포 revision
@@ -73,7 +73,7 @@ version에 모르는 선택 field가 추가된 경우에는 그 field만 무시�
 현재 snapshot:
 
 - public API
-- canonical envelope
+- envelope JSON 형식
 - default/representative config
 
 snapshot은 단순히 현재 결과를 복사해 둔 파일이 아니다. 사용자 코드와 저장된

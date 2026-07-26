@@ -47,7 +47,7 @@ sequenceDiagram
     participant C as Control Plane
     participant P as FinitePlanner
     participant V as validate_plan
-    participant D as Durable Store (후속 구현)
+    participant D as DB 저장소 (후속 구현)
 
     C->>V: WorkloadRequest + planner
     V->>P: planner(request)

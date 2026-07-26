@@ -95,7 +95,7 @@ runtime은 application, workload, execution, partition처럼 여러 제품에서
 있는 말만 사용한다. 주문, 문서, 크롤링 대상 같은 제품 전용 데이터는 payload나 제품
 DB에 둔다.
 
-### Immutable boundaries
+### 만든 뒤 바뀌지 않는 데이터
 
 message, payload, configuration처럼 코드 사이를 오가는 데이터는 만든 뒤 바뀌지
 않는다. 객체를 만든 다음 원래 dictionary를 수정해도 객체 안의 값은 그대로다.
@@ -104,7 +104,7 @@ message, payload, configuration처럼 코드 사이를 오가는 데이터는 �
 `CancellationSource`, 종료 상태를 관리하는 `GracefulShutdown`은 역할상 값이
 바뀌어야 한다.
 
-### Fail-closed validation
+### 잘못된 입력은 바로 거부
 
 잘못된 실행 종류, 정수 자리에 들어온 `True`, 범위를 벗어난 비율, 문자열이 아닌 JSON
 key, `NaN`/`Infinity`, 중복 ID를 임의로 고치지 않고 바로 거부한다.

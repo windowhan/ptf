@@ -470,7 +470,7 @@ client.submit(
 
 ## 9.2 작은 작업으로 나누기
 
-Product-provided planner returns generic `ExecutionUnit` values.
+제품이 제공한 planner는 공통 형식인 `ExecutionUnit`을 하나씩 반환한다.
 
 ```python
 async def plan(request):
@@ -484,7 +484,7 @@ async def plan(request):
 
 ## 9.3 Queue로 보내기
 
-Runtime maps `execution_class` to a Pub/Sub topic.
+runtime은 `execution_class`에 맞는 Pub/Sub topic을 선택한다.
 
 ```text
 lightweight
@@ -835,25 +835,25 @@ runtime_error_rate
 
 ## 18.1 Finite
 
-| Failure | Runtime Behavior |
+| 실패 상황 | Runtime 동작 |
 |---|---|
-| Runtime process crash | Pub/Sub redelivery |
-| VM termination | Pub/Sub redelivery |
-| Retryable error | retry |
-| Permanent error | failed or dead-letter |
-| Duplicate delivery | idempotency check |
-| Result persistence failure | success 확정 금지 |
+| Runtime process 종료 | Pub/Sub이 메시지를 다시 전달 |
+| VM 종료 | Pub/Sub이 메시지를 다시 전달 |
+| 재시도 가능한 오류 | 정해진 시각 뒤 다시 실행 |
+| 영구 오류 | 실패 또는 dead-letter 상태로 변경 |
+| 같은 메시지 중복 전달 | idempotency key로 이미 처리했는지 확인 |
+| 결과 DB 저장 실패 | 성공 상태로 확정하지 않음 |
 
 ## 18.2 Continuous
 
-| Failure | Runtime Behavior |
+| 실패 상황 | Runtime 동작 |
 |---|---|
-| Runtime process crash | lease expiry |
-| VM termination | partition reassignment |
-| External connection loss | product handler reconnect |
-| Heartbeat loss | lease recovery |
-| Sink failure | bounded retry/buffering |
-| Partition imbalance | reconciler rebalance |
+| Runtime process 종료 | lease가 만료되면 다른 worker가 인수 |
+| VM 종료 | partition을 다른 worker에 배정 |
+| 외부 연결 끊김 | 제품 handler가 다시 연결 |
+| Heartbeat 중단 | lease를 회수하고 다시 배정 |
+| Sink 장애 | 횟수와 용량 한도 안에서 재시도하고 임시 저장 |
+| Partition 쏠림 | reconciler가 일부 partition을 이동 |
 
 ---
 

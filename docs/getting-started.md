@@ -121,13 +121,16 @@ request = WorkloadRequest(
 units = await validate_plan(request, GreetingPlanner())
 ```
 
-`validate_plan()`은 planner의 결과를 끝까지 읽고 다음 내용을 확인한다.
+`validate_plan()`은 항상 다음 동작을 수행한다.
 
-- 같은 `unit_key`가 두 번 나오지 않았는지
-- payload를 항상 같은 방식으로 계산한 SHA-256
-- planner가 unit을 내보낸 순서
-- DB에 저장했던 이전 계획과 지금 계획이 달라지지 않았는지
-- 실행 중 중단 요청이 들어왔는지
+- planner의 결과를 끝까지 읽어 tuple로 반환한다.
+- 각 payload를 정해진 JSON 형식으로 바꾼 뒤 SHA-256을 계산한다.
+- 같은 `unit_key`가 두 번 나오면 오류를 발생시킨다.
+
+이 함수가 DB를 직접 읽지는 않는다. 호출자가 DB에서 읽은 이전 `PlanningRecord`를
+`expected=`로 전달한 경우에만 unit 개수, 순서, key, SHA-256이 이전 계획과 같은지
+비교한다. `cancellation=` token을 전달한 경우에는 계획을 읽는 중간에도 중단 요청을
+확인한다.
 
 ## 최소 Continuous workload
 
