@@ -92,8 +92,10 @@ runtime은 application, workload, execution, partition 같은 일반 용어만 �
 
 ### Immutable boundaries
 
-boundary 객체는 frozen dataclass와 immutable mapping을 사용한다. 생성 뒤 입력
-dictionary를 변경해도 내부 계약 값이 바뀌지 않아야 한다.
+message, payload, configuration 같은 데이터 boundary 객체는 frozen dataclass와
+immutable mapping을 사용한다. 생성 뒤 입력 dictionary를 변경해도 내부 계약 값이
+바뀌지 않아야 한다. composition root인 `RuntimeRegistry`와 process-local lifecycle
+controller인 `CancellationSource`, `GracefulShutdown`은 의도적으로 mutable하다.
 
 ### Fail-closed validation
 

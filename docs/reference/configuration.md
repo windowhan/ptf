@@ -170,11 +170,17 @@ database = DatabaseCapacity(
 floor((max_connections - reserved_connections) × utilization_limit)
 ```
 
-위 예에서는:
+현재 구현은 `math.floor()`와 Python binary `float`를 사용한다. 따라서 아래
+`0.70`은 내부적으로 정확한 10진수 0.70보다 조금 작은 값이 될 수 있다. 위 예의 실제
+반환값은 다음과 같다.
 
 ```text
 floor((200 - 20) × 0.70) = 125
 ```
+
+순수한 10진 산술이라면 결과는 126이지만, 현재 public behavior는 125다. 향후
+`Decimal` 또는 정수 비율로 바꾸는 경우 capacity 결과가 달라질 수 있으므로 호환성
+변경으로 리뷰하고 관련 capacity test와 snapshot을 함께 갱신해야 한다.
 
 `utilization_limit`은 0보다 크고 0.70 이하여야 한다. 운영자/관리 작업과 connection
 burst를 위해 30% 이상의 여유를 강제한다.

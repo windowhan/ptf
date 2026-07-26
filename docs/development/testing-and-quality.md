@@ -6,7 +6,8 @@
 
 - unit test는 개별 value object와 helper의 의미를 검증한다.
 - contract test는 직렬화, 공개 API, boundary 호환성을 검증한다.
-- package smoke는 source tree가 아닌 설치된 wheel을 검증한다.
+- package test는 개발 환경의 metadata/public surface를, isolated smoke는 설치된 wheel
+  import를 각각 검증한다.
 - 잘못된 입력을 보정하지 않고 fail-closed 동작을 테스트한다.
 
 ## 전체 로컬 게이트
@@ -104,7 +105,16 @@ snapshot 파일:
 snapshot 변경은 자동 포맷 결과로 취급하지 않는다. 어떤 public contract가 바뀌었고
 호환성 영향이 무엇인지 리뷰해야 한다.
 
-## Wheel 검증
+## Package와 wheel 검증
+
+검증은 두 층으로 나뉜다.
+
+1. `tests/test_package.py`는 `uv sync`로 설치된 개발 환경에서 distribution version,
+   extras, root facade, subpackage, `py.typed`, Google client 미로딩을 검사한다.
+2. CI의 isolated smoke는 새 virtual environment에 생성된 wheel을 설치하고 root 및
+   `gcp` namespace import와 Google client 미로딩을 검사한다.
+
+로컬에서 두 번째 층까지 재현하는 명령:
 
 ```bash
 uv build
@@ -114,16 +124,20 @@ uv pip install --python .venv-wheel/bin/python dist/*.whl
   "import distributed_runtime; import distributed_runtime.gcp"
 ```
 
-검사 항목:
+현재 자동화가 직접 보장하는 범위:
 
-- package name/version
-- Python requirement
-- `gcp`, `testing` extras
-- zero runtime `Requires-Dist`
-- `py.typed`
-- 최소 root facade
-- source checkout가 아닌 site-packages import
-- `distributed_runtime.gcp` import 시 Google module 미로딩
+| 검사 | `test_package.py` | CI metadata | isolated wheel |
+|---|---:|---:|---:|
+| runtime version과 distribution version 일치 | O | - | - |
+| `gcp`, `testing` extras | O | O | - |
+| 최소 root facade와 예상 subpackage | O | - | import만 |
+| `py.typed` | O | - | - |
+| Google client 미로딩 | O | - | O |
+| wheel의 distribution name | - | O | 설치 성공 |
+
+Python requirement와 runtime `Requires-Dist`는 현재 `pyproject.toml` 선언 및 build
+결과에 의존하며 전용 assertion은 없다. 이 둘을 release gate로 승격할 때는 wheel
+`METADATA` 검사도 CI에 추가해야 한다.
 
 ## CI
 
@@ -134,7 +148,7 @@ uv pip install --python .venv-wheel/bin/python dist/*.whl
 3. strict mypy
 4. branch coverage 90% gate
 5. sdist/wheel build
-6. wheel metadata 검사
+6. wheel name/extras metadata 검사
 7. isolated installed-wheel smoke
 
 로컬에서 Python 3.12만 검증했다면 나머지 버전의 최종 증거는 CI 결과다.

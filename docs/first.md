@@ -617,8 +617,8 @@ distributed_runtime.gcp.sql
 | Metrics | Cloud Monitoring |
 | Logs | Cloud Logging |
 | API deployment | Cloud Run |
-| Scheduled reconciliation | Cloud Scheduler / Compute Engine |
-| Distributed coordination | PostgreSQL or Memorystore Redis |
+| Scheduled reconciliation | Cloud Scheduler → single-task Cloud Run Job |
+| Distributed coordination | Cloud SQL PostgreSQL transaction/row state |
 
 ---
 

@@ -84,7 +84,13 @@ pending → planning → running → succeeded | failed | cancelled
 
 ## 구조화 오류
 
-모든 runtime 계약 오류는 `RuntimeContractError`를 상속한다.
+`distributed_runtime.core.errors`가 정의하는 구조화 오류는
+`RuntimeContractError`를 상속한다.
+
+모든 public validation 실패가 이 계층을 사용하는 것은 아니다. registry 등록 실패는
+`RegistrationError`, 일반 value-object와 Finite/Continuous 계약의 잘못된 입력은
+`ValueError` 또는 `TypeError`가 될 수 있다. 따라서 외부 boundary에서 오류를
+정규화하려면 구조화 오류뿐 아니라 해당 API가 명시한 표준 예외도 처리해야 한다.
 
 공통 속성:
 

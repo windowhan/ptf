@@ -132,7 +132,7 @@ validation 실패를 warning으로 바꾸고 실행을 계속하지 않는다.
 
 ## Observability 연결
 
-`LogContext`의 bounded field:
+adapter가 우선 사용하는 것을 권장하는 bounded field 집합:
 
 - service
 - runtime version
@@ -146,8 +146,15 @@ validation 실패를 warning으로 바꾸고 실행을 계속하지 않는다.
 execution ID와 partition ID처럼 cardinality가 큰 값은 structured log field로 사용하고
 custom metric label로 직접 사용하지 않는 것을 권장한다.
 
-모든 구조화 오류는 `RuntimeContractError.as_dict()` 형태를 유지한다. adapter-specific
-exception을 catch-all로 삼지 말고 retryable/permanent/cancelled 분류로 변환한다.
+현재 `LogContext`는 key의 빈 값, 예약어, JSON scalar 여부를 검증하지만 위 이름 목록이나
+cardinality를 강제하지 않는다. adapter와 observability exporter가 이 운영 규칙을
+검증해야 한다.
+
+core의 구조화 오류는 `RuntimeContractError.as_dict()` 형태를 유지한다.
+adapter-specific exception을 catch-all로 삼지 말고
+retryable/permanent/cancelled 분류로 변환한다. registry와 일반 value-object
+validation에서 발생하는 `RegistrationError`, `ValueError`, `TypeError`까지 자동으로
+구조화되는 것은 아니다.
 
 ## 구현 금지 패턴
 
