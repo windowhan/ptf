@@ -1,31 +1,46 @@
-# Continuous workload
+# Continuous workload: 계속 실행하는 작업
 
-Continuous workload는 종료 시점이 정해지지 않은 입력을 partition 단위로 발견하고,
-하나의 runtime instance가 유효한 lease를 보유하는 동안 처리하는 모델이다.
+Continuous workload는 종료 시점이 정해지지 않은 작업이다. 처리 대상을 partition으로
+나누고 여러 worker가 서로 다른 partition을 맡는다.
+
+한 partition은 동시에 한 worker만 처리해야 한다. 이를 위해 worker는 일정 시간 동안
+유효한 처리 권한인 lease를 얻는다.
 
 예:
 
-- Kafka/Pub/Sub subscription shard 처리
-- tenant별 지속 polling
-- 데이터베이스 change stream
-- 장시간 유지되는 외부 event feed
+- Kafka 또는 Pub/Sub의 여러 구역 처리
+- 고객별로 계속 반복하는 polling
+- 데이터베이스 변경 내역 읽기
+- 연결을 오래 유지하는 외부 이벤트 수신
 
-현재 구현은 partition, lease, fencing, sink의 **계약**을 제공한다. 실제 discovery
-scheduler, Cloud SQL lease transaction, worker loop는 후속 단계다.
+현재 코드는 partition, lease, 오래된 worker 차단, 결과 전송에 대한 Python 규칙만
+제공한다. partition을 주기적으로 찾는 작업, Cloud SQL 소유권 처리, 실제 worker
+반복문은 아직 없다.
+
+## 한눈에 보는 처리 순서
+
+1. workload가 지금 처리해야 할 partition 목록을 반환한다.
+2. reconciler가 목록을 DB의 원하는 상태와 맞춘다.
+3. worker 하나가 partition의 lease를 얻는다.
+4. worker가 lease를 가진 동안 `run_partition()`을 실행한다.
+5. worker는 lease를 계속 연장한다.
+6. lease를 잃거나 종료 요청을 받으면 처리를 멈춘다.
+
+현재 구현은 1단계 결과 검사와 3~6단계가 따라야 할 데이터 규칙을 제공한다.
 
 ## 주요 타입
 
-| 타입 | 책임 |
+| 타입 | 쉬운 설명 |
 |---|---|
-| `Partition` | 독립적으로 소유되는 immutable shard |
-| `ContinuousWorkload` | discovery와 partition 처리 Protocol |
-| `discover_partitions()` | 중복 제거가 아닌 중복 거부와 안정 정렬 |
-| `LeaseHandle` | owner와 fencing token을 포함한 소유권 증명 |
-| `PartitionContext` | handler에 제공되는 lease/sink/cancellation |
-| `EventSink` | stable ID와 lease를 요구하는 출력 Protocol |
-| `SinkGuarantee` | runtime-fenced와 reduced-direct 구분 |
+| `Partition` | worker 하나가 맡아 처리할 독립 구역이다. |
+| `ContinuousWorkload` | partition을 찾고 처리하는 제품 코드 규칙이다. |
+| `discover_partitions()` | partition 목록을 정렬하고 중복 ID를 거부한다. |
+| `LeaseHandle` | 누가 어떤 token으로 partition을 맡았는지 담는다. |
+| `PartitionContext` | lease, sink, 중단 요청을 handler에 전달한다. |
+| `EventSink` | 처리 결과를 내보내는 코드 규칙이다. |
+| `SinkGuarantee` | runtime이 결과 전송을 어디까지 보호하는지 표시한다. |
 
-## Discovery 흐름
+## Partition을 찾는 흐름
 
 ```mermaid
 sequenceDiagram
@@ -43,26 +58,27 @@ sequenceDiagram
 ```
 
 `discover_partitions()` helper는 결과를 `PartitionId.value` 순으로 정렬한다. 같은
-`PartitionId`가 두 번 나오면 payload가 같아도 실패한다.
+ID가 두 번 나오면 payload가 같아도 오류다. 중복 항목 중 하나를 조용히 버리지 않는다.
 
-## Partition 계약
+## Partition에 들어가는 값
 
 `Partition`은 다음 값을 가진다.
 
 - `partition_id`
-- immutable JSON payload
-- positive integer `weight`
-- immutable string metadata
+- 만든 뒤 바뀌지 않는 JSON payload
+- 1 이상의 정수 `weight`
+- 만든 뒤 바뀌지 않는 문자열 metadata
 
-weight는 후속 balancing algorithm이 사용할 상대 비용이다. 현재 helper는 weight를
-기반으로 배치하거나 instance에 할당하지 않는다.
+`weight`는 partition 하나가 다른 partition보다 얼마나 무거운지를 나타내는 상대
+값이다. 앞으로 balancing 코드를 만들 때 사용할 수 있다. 현재 helper는 weight를
+검사만 하고 worker 배치에는 사용하지 않는다.
 
-partition ID는 discovery 순서나 worker instance에 의존하면 안 된다. 외부 shard나
-tenant의 안정적인 identity를 사용한다.
+partition ID는 목록의 순서나 현재 worker 이름으로 만들면 안 된다. 같은 외부 shard나
+고객은 다시 발견해도 같은 ID가 나와야 한다.
 
-## LeaseHandle
+## 누가 partition을 맡았는지 나타내는 LeaseHandle
 
-lease identity는 다음 네 값으로 구성된다.
+lease는 다음 네 값을 함께 비교해야 한다.
 
 ```text
 deployment_id
@@ -71,7 +87,7 @@ owner_id
 fencing_token
 ```
 
-`LeaseHandle.authorizes()`는 네 값이 모두 정확히 일치할 때만 `True`다.
+`LeaseHandle.authorizes()`는 네 값이 모두 정확히 같을 때만 `True`를 반환한다.
 
 ```python
 lease.authorizes(
@@ -82,38 +98,38 @@ lease.authorizes(
 )
 ```
 
-fencing token은 exact positive integer다. `1.0`, `True` 같은 Python 동등값은
-허용하지 않는다.
+fencing token은 1 이상의 정수여야 한다. Python에서 비슷하게 취급될 수 있는 `1.0`과
+`True`는 받지 않는다.
 
-## Fencing이 필요한 이유
+## 오래된 worker의 쓰기를 막아야 하는 이유
 
 다음 상황을 가정한다.
 
-1. instance A가 token 10으로 partition을 처리한다.
-2. heartbeat가 끊겨 lease가 만료된다.
-3. instance B가 token 11로 partition을 인수한다.
-4. 네트워크가 복구되어 A가 뒤늦게 쓰기를 시도한다.
+1. worker A가 token 10으로 partition을 처리한다.
+2. A의 네트워크가 끊겨 lease가 만료된다.
+3. worker B가 더 큰 token 11로 partition을 이어받는다.
+4. A의 네트워크가 복구되고 A가 뒤늦게 결과를 쓰려고 한다.
 
-owner 문자열만 비교하면 A의 stale write를 구분하기 어렵다. 저장소나 sink가 최신
-token 11을 조건으로 요구하면 token 10인 쓰기를 거부할 수 있다.
+4단계의 A는 이미 권한을 잃은 오래된 worker다. 저장소와 sink가 최신 token 11을
+요구하면 token 10을 가진 A의 쓰기를 거부할 수 있다. 이 번호가 fencing token이다.
 
-현재 `LeaseHandle`은 조건을 표현하는 value object다. 실제 안전성은 후속 Cloud SQL
-query와 sink adapter가 fencing token을 조건부 write에 포함해야 완성된다.
+현재 `LeaseHandle`은 네 값이 맞는지 Python 안에서 비교할 뿐이다. 실제로 안전하려면
+Cloud SQL 쿼리와 sink도 “token이 아직 최신인가?”를 쓰기 조건에 포함해야 한다.
 
-## PartitionContext
+## Handler가 받는 PartitionContext
 
-handler에 제공하는 값:
+handler는 `PartitionContext`에서 다음 값을 받는다.
 
 - workload ID
 - 현재 partition
-- 현재 lease
-- sink registry
-- immutable metadata
-- cancellation token
-- log context
-- optional deadline
+- 현재 처리 권한
+- 결과를 보낼 sink 목록
+- 만든 뒤 바뀌지 않는 metadata
+- 중단 요청
+- 로그에 넣을 공통 정보
+- 설정된 경우 작업을 끝내야 하는 시각
 
-partition과 lease의 partition ID가 다르면 context 생성이 실패한다.
+partition ID와 lease의 partition ID가 다르면 context를 만들 수 없다.
 
 ```python
 await context.emit(
@@ -123,30 +139,31 @@ await context.emit(
 )
 ```
 
-`emit()`은 sink name과 stable ID를 검증하고 현재 lease를 sink에 전달한다.
+`emit()`은 sink 이름과 이벤트 ID가 올바른 형식인지 확인한다. 그리고 현재 lease를
+sink에 함께 전달한다. sink는 이 lease로 아직 쓰기 권한이 있는지 확인할 수 있다.
 
-## Sink guarantee
+## 결과 전송을 어디까지 보호하는가
 
 ### `RUNTIME_FENCED`
 
-runtime이 관리하는 durable path를 통해 stable ID와 fencing token을 검증할 수 있는
-sink를 의미한다.
+runtime이 관리하는 DB 경로를 사용한다. 이벤트 ID와 fencing token을 모두 검사할 수
+있으므로 권한을 잃은 worker의 쓰기를 막을 수 있다.
 
-예상되는 후속 구현:
+앞으로 만들 수 있는 예:
 
 - Cloud SQL outbox
-- token 조건부 append
-- stable ID unique constraint
+- 최신 token일 때만 저장하는 조건부 쓰기
+- 같은 이벤트 ID의 중복 저장을 막는 DB 제약
 
 ### `REDUCED_DIRECT`
 
-제품 코드가 외부 시스템으로 직접 전송하며 runtime이 fencing을 완전히 보장할 수 없는
-경로다.
+제품 코드가 외부 시스템으로 바로 결과를 보낸다. runtime DB를 거치지 않으므로
+runtime이 오래된 worker의 쓰기를 완전히 막을 수 없다.
 
-이 경우 문서와 운영 지표에 보장 축소를 명시해야 하고, 외부 시스템의 idempotency나
-conditional write 기능을 제품이 책임져야 한다.
+이 방식을 사용하면 보호 수준이 낮다는 사실을 문서와 운영 지표에 표시해야 한다.
+중복 방지나 token 확인은 제품 코드와 외부 시스템이 맡는다.
 
-## ContinuousWorkload 계약
+## 제품 코드가 구현할 메서드
 
 ```python
 class ContinuousWorkload(Protocol):
@@ -163,41 +180,42 @@ class ContinuousWorkload(Protocol):
     ) -> None: ...
 ```
 
-등록 name/version/mode는 workload 선언과 정확히 일치해야 한다.
+registry에 등록한 이름, 버전, 실행 종류는 workload 클래스가 선언한 값과 정확히
+같아야 한다.
 
-## Cancellation과 lease loss
+## 종료 요청이나 lease 상실을 처리하는 방법
 
-후속 worker는 최소한 다음 사건을 동일한 cooperative cancellation 경로로 연결해야 한다.
+후속 worker는 아래 사건을 모두 같은 cancellation 신호로 바꿔 handler에 전달해야 한다.
 
 - SIGTERM
-- deployment drain/stop
-- lease renew 실패
+- deployment의 안전한 정지 또는 강제 중단
+- lease 연장 실패
 - 더 높은 fencing token 발견
-- handler deadline 만료
-- process shutdown grace period 만료
+- handler의 실행 마감 시각 도달
+- 안전한 종료를 위해 기다릴 수 있는 시간 초과
 
-handler는 `context.cancellation.raise_if_cancelled()`를 주기적으로 호출하거나,
-I/O loop가 token 상태를 관찰하도록 구현한다.
+handler는 긴 반복문 안에서 `context.cancellation.raise_if_cancelled()`를 주기적으로
+호출해야 한다. 또는 I/O 대기 코드가 cancellation 상태를 확인하도록 만든다.
 
-## Reconciler의 후속 의무
+## 앞으로 reconciler가 구현해야 할 것
 
-- discovery 결과를 desired set으로 durable하게 기록한다.
-- 사라진 partition은 즉시 삭제하지 않고 상태 전이를 관리한다.
-- lease acquire 시 fencing token을 단조 증가시킨다.
-- renew/release/checkpoint에 owner와 token 조건을 포함한다.
-- 중복 reconcile tick을 안전하게 허용한다.
-- expired lease를 회수하고 unassigned partition을 재배치한다.
-- stale owner write와 duplicate event를 관측 가능한 metric으로 남긴다.
-- shutdown 중 새 lease 획득을 멈추고 기존 partition을 drain한다.
+- 발견한 partition 목록을 DB에 원하는 상태로 저장한다.
+- 사라진 partition을 바로 삭제하지 않고 종료 상태를 거치게 한다.
+- 새 worker가 lease를 얻을 때 fencing token을 반드시 증가시킨다.
+- lease 연장·반납·진행 위치 저장 시 owner와 token을 함께 확인한다.
+- 같은 조정 작업이 겹쳐 실행되어도 상태가 깨지지 않게 만든다.
+- 만료된 lease를 회수하고 주인이 없는 partition을 다시 배치한다.
+- 오래된 worker의 쓰기와 중복 이벤트 수를 지표로 남긴다.
+- 종료 중에는 새 lease를 얻지 않고 맡고 있던 partition만 정리한다.
 
-## 현재 보장하지 않는 것
+## 현재 코드만으로는 되지 않는 것
 
-- cross-process lease exclusion
-- external sink exactly-once
-- partition 자동 balancing
-- heartbeat 전송
-- process 재시작 후 checkpoint 복원
-- Cloud SQL failover 중 자동 재연결
+- 여러 process 사이에서 동시에 lease를 얻지 못하게 막는 것
+- 외부 sink에 이벤트가 정확히 한 번만 기록되는 것
+- partition을 worker에 자동으로 고르게 나누는 것
+- worker가 살아 있다는 heartbeat 전송
+- process 재시작 뒤 마지막 처리 위치 복구
+- Cloud SQL 장애 전환 중 자동 재연결
 
-이 보장은 `LeaseHandle`만으로 생기지 않으며, storage/worker/reconciler가 계약을
-정확히 구현해야 한다.
+이 기능은 `LeaseHandle` 객체 하나로 생기지 않는다. 앞으로 만들 DB 저장 코드, worker,
+reconciler가 같은 소유권 규칙을 모두 지켜야 한다.
