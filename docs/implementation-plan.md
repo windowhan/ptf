@@ -3,27 +3,54 @@
 > 이 문서는 Phase 1~5의 **구현 로드맵**이다.
 > 현재 Milestone01 구현의 사용법과 정확한 공개 계약은
 > [`docs/README.md`](README.md)에서 시작한다.
+> 낯선 용어는 [`쉬운 용어 설명`](glossary.md)을 참고한다.
+
+## 먼저 읽는 요약
+
+최종 목표는 다음과 같다.
+
+1. 공통 Python 계약과 로컬 테스트 도구를 만든다.
+2. Cloud SQL에 실행 상태와 partition 소유권을 저장한다.
+3. Pub/Sub과 MIG를 연결해 Finite 작업을 실제로 실행한다.
+4. lease와 fencing을 사용해 Continuous 작업을 실제로 실행한다.
+5. 제품용 예제를 만들고 실제 GCP에 배포한다.
+6. 장애, 버전 변경, 보안, 정리 작업까지 검증한다.
+
+완료라고 판단하려면 Finite 예제와 Continuous 예제를 실제 GCP에서 처음부터 끝까지
+실행해야 한다. 단순히 unit test가 통과하거나 Terraform 파일이 만들어진 것만으로는
+완료가 아니다.
 
 ## 1. 목표와 범위
 
-`docs/first.md`의 Phase 1~5를 모두 구현한다. 최초 릴리스는 한 사람이 관리하는 단일 GCP 프로젝트·단일 리전의 private internal runtime이며, domain-neutral Finite/Continuous examples를 실제 GCP에 배포해 E2E 완료를 증명한다.
+`docs/first.md`의 Phase 1~5를 모두 구현한다.
 
-비목표는 multicloud, Kubernetes abstraction, DAG engine, arbitrary remote code execution, exactly-once guarantee, product-specific workload, multi-project/region/team isolation, public PyPI다.
+첫 릴리스는 한 사람이 관리하는 GCP 프로젝트 하나와 region 하나에서 운영한다.
+외부에 공개하지 않는 내부 runtime으로 시작한다. 특정 제품에 묶이지 않은 Finite와
+Continuous 예제를 실제 GCP에 배포해 전체 경로가 동작하는지 확인한다.
+
+첫 릴리스에서 만들지 않는 것:
+
+- 멀티클라우드와 Kubernetes 공통 계층
+- 범용 DAG engine과 임의 코드 원격 실행
+- 외부 부수 효과까지 포함한 exactly-once 보장
+- 특정 제품에만 쓰이는 workload
+- 여러 project, region, team을 나누는 기능
+- public PyPI 배포
 
 ## 2. 핵심 결정
 
 | 영역 | 결정 |
 |---|---|
-| Python | 단일 `distributed-runtime` distribution, Python >=3.12 |
-| 상태 | Cloud SQL PostgreSQL 권위 원장 |
-| Finite | Pub/Sub StreamingPull + revision별 MIG |
-| Continuous | min 2 MIG + DB-time lease/fencing |
-| Control | IAM client/admin Cloud Run services 분리 |
-| Reconcile | Cloud Scheduler → single-task Cloud Run Job |
-| Retry | Cloud SQL schedule/outbox; Pub/Sub retry/DLQ는 infra safety net |
-| Emission | token-authorized, stable-ID emission outbox |
-| Rollout | revision-filtered subscriptions + capability-aware assignment |
-| Infra | Terraform, private Artifact Registry, dedicated service accounts |
+| Python | Python 3.12 이상, `distributed-runtime` package 하나 |
+| 상태 저장 | Cloud SQL PostgreSQL을 최종 기준으로 사용 |
+| Finite | Pub/Sub 메시지를 revision별 MIG worker가 처리 |
+| Continuous | 최소 2개 MIG worker와 DB 시각 기반 lease/fencing |
+| Control API | 일반 사용자용과 관리자용 Cloud Run service 분리 |
+| 상태 조정 | Cloud Scheduler가 단일 task Cloud Run Job 실행 |
+| 재시도 | Cloud SQL이 다음 실행 시각 관리, Pub/Sub DLQ는 인프라 안전망 |
+| 결과 전송 | stable ID와 fencing token을 확인하는 outbox |
+| 새 version 배포 | revision별 subscription과 worker capability 확인 |
+| Infrastructure | Terraform, private Artifact Registry, 전용 service account |
 
 ```text
 Private consumer → Client API → Cloud SQL
@@ -35,39 +62,40 @@ Scheduler → reconciler Job → Cloud SQL leases → continuous MIG
 Emission outbox → dispatcher → external sink
 ```
 
-## 3. Correctness invariants
+## 3. 반드시 지켜야 할 정확성 규칙
 
-### Durable planning
+### 재시도해도 바뀌지 않는 계획
 
-1. submit transaction이 immutable request와 planner/execution revision을 pin한다.
-2. planner는 `(ordinal, unit_key, payload_hash)` sequence를 재현한다.
-3. retry 결과가 기존 prefix/count/checksum과 다르면 `PlanningDriftError`다.
-4. planning finalize 전에는 unit을 publish하지 않는다.
+1. 요청을 받을 때 입력과 planner/handler revision을 DB에 고정한다.
+2. planner를 다시 실행해도 unit 순서, key, payload hash가 같아야 한다.
+3. 이전 결과와 다르면 `PlanningDriftError`로 중단한다.
+4. 전체 계획을 DB에 저장하기 전에는 unit 메시지를 보내지 않는다.
 
 ### Finite
 
-1. outbox publish는 at-least-once이며 publish-side duplicate를 허용한다.
-2. active unit은 owner/generation/expiry claim을 가진다.
-3. current claim generation만 result/terminal state를 commit한다.
-4. DB commit 뒤에만 Pub/Sub ack한다.
-5. external side effect는 handler idempotency contract를 따른다.
+1. outbox 메시지는 중복 발행될 수 있다고 가정한다.
+2. 실행 중인 unit에는 owner, generation, 만료 시각이 있다.
+3. 최신 generation을 가진 worker만 결과와 종료 상태를 저장할 수 있다.
+4. 결과를 DB에 저장한 뒤에만 Pub/Sub 메시지에 ack한다.
+5. 외부 API 호출의 중복 방지는 제품 handler가 맡는다.
 
 ### Continuous
 
-1. lease는 DB clock과 monotonic fencing token을 사용한다.
-2. renew/release/checkpoint/emission은 owner+token 조건이다.
-3. emission dedupe key는 token-independent stable logical ID다.
-4. successor replay도 같은 emission row로 수렴한다.
-5. custom direct sink는 runtime fencing guarantee 밖이다.
+1. lease 만료는 DB 시각으로 계산하고 fencing token은 계속 증가시킨다.
+2. 연장, 반납, 진행 위치, 결과 저장에는 owner와 token을 확인한다.
+3. 결과 중복 방지 ID는 fencing token이 바뀌어도 같아야 한다.
+4. 다음 worker가 같은 결과를 다시 만들어도 같은 outbox 행으로 모인다.
+5. 외부로 바로 보내는 custom sink는 runtime이 완전히 보호할 수 없다.
 
 ### Revision/migration
 
-1. submit 뒤 planner/execution revision pin은 불변이다.
-2. 새 submission만 active revision 전환의 영향을 받는다.
-3. finite message는 revision subscription 하나에만 일치한다.
-4. continuous partition은 capability-compatible instance에만 할당된다.
-5. migration은 expand → backfill → capability gate → contract 순서다.
-6. contract 전 old backlog/claim/lease/incompatible heartbeat가 없어야 한다.
+1. 요청을 받은 뒤 planner와 handler revision을 바꾸지 않는다.
+2. 새 active revision은 이후에 들어온 요청에만 적용한다.
+3. Finite 메시지는 revision 하나의 subscription에만 전달한다.
+4. Continuous partition은 필요한 기능을 지원하는 worker에만 배정한다.
+5. DB migration은 새 구조 추가 → 기존 데이터 채우기 → 지원 worker 확인 → 옛 구조
+   제거 순서로 진행한다.
+6. 옛 구조를 지우기 전에 이전 메시지, 실행 권한, lease, 구버전 worker가 없어야 한다.
 
 ## 4. 운영 기본값
 
@@ -113,9 +141,13 @@ tests/{unit,contract,integration,e2e}/
 docs/runbooks/
 ```
 
-## 6. Review-sized commit plan
+## 6. 사람이 리뷰하기 좋은 커밋 계획
 
-코드 commit은 원칙적으로 추가·삭제 합계 300~500줄이며 한 논리 변경과 targeted test를 함께 담는다. generated/lock/docs-only 예외는 padding하지 않고 commit body에 이유를 남긴다.
+코드 커밋은 원칙적으로 추가와 삭제를 합쳐 300~500줄로 만든다. 커밋 하나에는 한 가지
+변경 의도와 그 변경을 확인하는 테스트를 함께 넣는다.
+
+자동 생성 파일, lock file, 문서만 바꾼 커밋은 줄 수를 맞추려고 의미 없는 내용을
+추가하지 않는다. 범위를 벗어난 이유는 커밋 본문에 남긴다.
 
 | # | 변경 의도 | Gate |
 |---:|---|---|
@@ -184,7 +216,7 @@ docs/runbooks/
 | 63 | security/release audit | RELEASE-GATE |
 | 64 | runbooks | docs-only exception |
 
-### Milestone exit gates
+### 각 단계의 완료 기준
 
 1. Contracts: unit/contract/import matrix
 2. Local kits: deterministic queue/clock/claim/lease/emission
@@ -195,26 +227,27 @@ docs/runbooks/
 7. Actual GCP: finite/continuous/autoscaling/observability/teardown
 8. Hardening: N/N-1/migration/failover/cleanup/release
 
-상세 commit dependency graph은 consensus plan의 각 commit에 대해 명시하며, E2E는 runtime·infra·IAM exit gate 이전에 시작하지 않는다.
+각 커밋의 선행 관계는 실행 계획에 따로 기록한다. runtime, infrastructure, IAM 검사를
+통과하기 전에는 비용이 발생하는 실제 GCP E2E를 시작하지 않는다.
 
-## 7. Actual GCP acceptance
+## 7. 실제 GCP에서 확인할 완료 조건
 
 ### Finite
 
-- 20 units: 19 success, 1 runtime dead-letter
-- retry/rate-limit/timeout/crash/duplicate/permanent failure 주입
-- publish duplicate여도 logical execution/side effect 하나
-- MIG 0→N 15분, N→0 30분 이내
-- revision switch 전 run은 기존 revision에서 완료
+- unit 20개 중 19개 성공, 의도적으로 실패시킨 1개는 runtime DLQ로 이동
+- 재시도, rate limit, timeout, worker crash, 중복 메시지, 영구 실패 상황 주입
+- 같은 메시지를 중복 발행해도 논리 실행과 부수 효과는 하나
+- MIG가 15분 안에 0개에서 필요한 수로 증가하고 30분 안에 다시 0개
+- revision 변경 전에 제출한 run은 이전 revision으로 끝까지 처리
 
 ### Continuous
 
-- 6 partitions, 최소 2 instances
-- owner kill 뒤 150초 내 higher-token successor
-- stale token write 거부
-- bounded rebalance 후 weighted load 차이 <=1
-- CPU load로 2→3 이상 15분 내 scale-out
-- load 제거 뒤 30분 내 min 2 복귀
+- partition 6개를 worker 최소 2개가 처리
+- owner를 종료한 뒤 150초 안에 더 큰 token을 가진 worker가 인수
+- 이전 token의 쓰기 거부
+- 제한된 수만 이동해 재배치한 뒤 worker 간 무게 차이가 1 이하
+- CPU 부하를 주면 15분 안에 worker가 2개에서 3개 이상으로 증가
+- 부하를 제거하면 30분 안에 최소값 2개로 복귀
 
 ### Security/operations
 
@@ -224,7 +257,7 @@ docs/runbooks/
 - migration recovery evidence
 - teardown 뒤 unexpected transient resource 없음
 
-## 8. Alert baseline
+## 8. 기본 alert 기준
 
 | Alert | Fire condition | Fire deadline |
 |---|---|---|
@@ -240,21 +273,22 @@ docs/runbooks/
 | SQL CPU | >80% 10분 | 15분 |
 | MIG unhealthy | >0 5분 | 10분 |
 
-Evidence는 policy ID, query, incident open/recovery timestamp를 저장한다.
+검증 증거에는 alert policy ID, 사용한 query, 장애가 열린 시각과 복구된 시각을
+저장한다.
 
 ## 9. 주요 위험
 
 | 위험 | 완화 |
 |---|---|
-| SQL bottleneck/outage | short transactions, 70% budget, HA/fail-closed tests |
-| publish duplicate | stable IDs, claim generation, dedupe |
-| overlapping finite handler | expiring claim + fenced terminal commit |
-| stale partition owner | DB lease/fencing/stable emission ID |
-| mixed-version delivery | revision filters + submit pin + capabilities |
-| planner drift | immutable input + ordinal/key/hash/checksum |
-| sink outage growth | backpressure/watermark/failed/resume |
-| migration outage | expand/contract/PITR/roll-forward |
-| flaky/costly E2E | unique prefix/bounded polling/teardown inventory |
+| Cloud SQL 병목 또는 장애 | 짧은 transaction, 70% 연결 예산, HA 장애 테스트 |
+| 중복 메시지 발행 | 고정 ID, claim generation, 중복 저장 방지 |
+| Finite handler가 겹쳐 실행 | 만료되는 claim과 최신 generation만 완료 허용 |
+| 권한을 잃은 partition owner | DB lease, fencing token, 고정 결과 ID |
+| 여러 version으로 잘못 전달 | revision filter, 요청 revision 고정, worker 기능 확인 |
+| 같은 요청의 planner 결과 변경 | 바뀌지 않는 입력과 순서·key·hash 비교 |
+| sink 장애로 데이터 증가 | 처리 속도 제한, 한도, 실패 상태, 재개 기능 |
+| DB migration 장애 | 단계적 변경, PITR, 이전 단계로 전진 복구 |
+| 느리거나 비싼 E2E | 고유한 이름, 제한 시간 polling, 전체 리소스 정리 |
 
 ## 10. 공식 근거
 
@@ -269,4 +303,8 @@ Evidence는 policy ID, query, incident open/recovery timestamp를 저장한다.
 
 ## 11. 실행 경계
 
-실제 GCP E2E는 credentials, billable resources, IAM 변경을 포함하므로 execution 단계에서 별도 external-production gate가 필요하다. 이 문서는 구현 권한이 아니라 합의된 계획이다.
+실제 GCP E2E에는 credential 사용, 비용이 드는 리소스 생성, IAM 변경이 포함된다.
+따라서 실행할 때는 외부 환경 변경 절차를 따로 거쳐야 한다.
+
+이 문서는 무엇을 구현할지 정한 계획이다. 이 문서 자체가 GCP 리소스를 만들 권한을
+부여하지는 않는다.

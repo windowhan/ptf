@@ -1,37 +1,43 @@
 # GCP Distributed Workload Runtime
-## Library-Oriented Architecture Document
+## 재사용 가능한 Python library 중심의 목표 아키텍처
 
 > 이 문서는 Phase 1~5 전체 **목표 아키텍처**를 설명한다.
 > 현재 Milestone01에서 실제 구현된 계약 계층과 미구현 경계는
 > [`docs/README.md`](README.md)와
 > [`현재 계약 계층 아키텍처`](architecture/current-contract-layer.md)를 먼저 참고한다.
+> 처음 보는 용어는 [`쉬운 용어 설명`](glossary.md)에서 확인할 수 있다.
 
-**Status:** Final Draft  
-**Version:** 1.1  
-**Target platform:** Google Cloud Platform  
-**Distribution model:** Reusable Python library and deployable runtime components
+**문서 상태:** 최종 초안
+**문서 버전:** 1.1
+**실행 환경:** Google Cloud Platform
+**배포 형태:** 재사용하는 Python library와 실제 실행 component
 
 ---
 
-# 1. Overview
+# 1. 먼저 읽는 요약
 
-본 프로젝트는 특정 크롤러, 거래소, 데이터 수집기 또는 제품에 종속된 애플리케이션이 아니다.
+이 프로젝트는 특정 제품 하나를 위한 실행 프로그램이 아니다. 여러 제품이 공통으로
+가져다 쓸 수 있는 분산 작업 runtime을 만드는 것이 목표다.
 
-목표는 다른 제품이 Python dependency로 가져와 다음 두 종류의 workload를 GCP에서 분산 실행할 수 있게 하는 **재사용 가능한 distributed workload runtime**을 제공하는 것이다.
+runtime은 크게 두 종류의 작업을 처리한다.
 
-1. **Finite Workload**
-   - 입력이 유한함
-   - 여러 독립 실행 단위로 분할 가능
-   - 실행 후 완료됨
-   - queue backlog 기반 autoscaling에 적합
+1. **Finite workload: 처리할 양이 정해진 작업**
+   - 큰 요청을 작은 unit으로 나눈다.
+   - 각 unit을 따로 실행하고 재시도한다.
+   - 모든 unit 처리가 끝나면 run도 끝난다.
+   - queue에 쌓인 양에 따라 worker 수를 바꾼다.
 
-2. **Continuous Workload**
-   - 장시간 또는 무기한 실행
-   - 외부 연결이나 로컬 상태를 유지
-   - partition 또는 shard ownership 필요
-   - heartbeat, lease, rebalance가 필요
+2. **Continuous workload: 계속 실행하는 작업**
+   - 처리 대상을 partition으로 나눈다.
+   - worker가 일정 시간 처리 권한인 lease를 얻는다.
+   - worker 상태를 heartbeat로 확인한다.
+   - worker가 죽으면 다른 worker가 partition을 이어받는다.
 
-쇼핑몰 크롤링은 Finite Workload의 한 사용 사례이며, 실시간 시장 데이터 수집은 Continuous Workload의 한 사용 사례다. 이 use case들은 core library에 포함되지 않고 별도 product package에서 runtime을 사용한다.
+예를 들어 쇼핑몰 상품 1,000개를 한 번 수집하는 일은 Finite 작업이다. 실시간 시장
+데이터를 계속 받는 일은 Continuous 작업이다.
+
+상품이나 시장 데이터의 구체적인 처리 방법은 runtime에 넣지 않는다. 각 제품 package가
+자신의 handler와 데이터 형식을 제공한다.
 
 ```text
 Product A                    Product B
@@ -54,9 +60,9 @@ Batch Data Collection       Streaming Data Ingestion
 
 ---
 
-# 2. Primary Design Goal
+# 2. 최종 사용 모습
 
-다른 프로젝트가 다음과 같이 dependency를 추가해 사용할 수 있어야 한다.
+다른 프로젝트가 Python dependency 하나를 추가해 runtime을 사용할 수 있어야 한다.
 
 ```toml
 [project]
@@ -65,7 +71,8 @@ dependencies = [
 ]
 ```
 
-Product code는 GCP resource lifecycle이나 worker orchestration을 직접 구현하지 않는다.
+아래 코드는 **최종 목표 API의 예시**다. 현재 Milestone01 API와는 다를 수 있다.
+제품 코드는 GCP 리소스 생성이나 worker 배치 방법을 직접 구현하지 않는다.
 
 ```python
 from distributed_runtime import finite
@@ -84,49 +91,48 @@ class MarketStream(continuous.PartitionHandler):
             await ctx.emit(event)
 ```
 
-Library는 다음을 담당한다.
+Runtime library가 맡을 일:
 
-- **workload registration**: workload의 이름, 버전, 실행 모드와 handler를 등록하고, 실행 요청이 올바른 product 코드로 연결되도록 관리한다.
-- **execution contract**: Finite Workload의 실행 단위와 Continuous Workload의 partition이 어떤 입력, context, 결과 및 생명주기를 따라야 하는지 공통 인터페이스로 정의한다.
-- **serialization**: 요청, payload, 결과, event를 Pub/Sub 메시지나 저장소에 기록할 수 있는 형식으로 변환하고 다시 복원한다.
-- **retries**: 일시적 오류가 발생한 실행을 backoff와 최대 시도 횟수 정책에 따라 재시도하고, 한도를 넘으면 실패 또는 dead-letter 상태로 전환한다.
-- **idempotency**: 메시지 중복 전달이나 재시도가 발생해도 동일한 실행 단위의 부수 효과가 중복으로 적용되지 않도록 식별하고 제어한다.
-- **leases**: 특정 runtime instance에 작업 또는 partition의 소유권을 제한된 시간 동안 부여하고, 만료 시 다른 instance가 인계할 수 있게 한다.
-- **heartbeat**: runtime instance가 정상 동작 중임을 주기적으로 기록하여 장애를 감지하고, 필요한 경우 보유한 lease를 갱신한다.
-- **partition ownership**: 하나의 partition을 동시에 하나의 유효한 runtime instance만 처리하도록 할당, 재할당 및 drain 과정을 조정한다.
-- **Pub/Sub integration**: 실행 메시지의 publish, consume, ack/nack와 재전달 처리를 GCP Pub/Sub에 연결한다.
-- **Worker runtime**: product handler를 로드해 실행하고, 실행 context 주입부터 상태 기록과 결과 처리까지 worker의 전체 생명주기를 관리한다.
-- **graceful shutdown**: 종료 신호를 받으면 신규 작업 수신을 중단하고, 진행 중인 작업을 안전하게 마치거나 다른 instance가 인계할 수 있는 상태로 정리한다.
-- **observability**: 실행 상태, 구조화 로그, metric 및 오류 정보를 수집하여 처리량, 지연, 실패와 runtime 상태를 추적할 수 있게 한다.
-- **GCP deployment metadata**: 배포된 runtime의 image/version, runtime pool, instance 및 region 같은 정보를 실행 기록과 연결하여 운영과 장애 분석에 사용한다.
+- workload 이름, 버전, 종류와 handler 등록
+- Finite unit과 Continuous partition이 따라야 할 입력·출력 규칙 제공
+- 요청과 결과를 Pub/Sub 또는 DB에 저장할 형식으로 변환
+- 일시적 실패의 재시도 시각과 최대 횟수 관리
+- 같은 메시지가 다시 와도 같은 작업임을 알아보는 ID 관리
+- partition lease 발급, 연장, 만료, 인계
+- worker가 살아 있는지 heartbeat로 확인
+- Pub/Sub 메시지 보내기, 받기, ack/nack 처리
+- 제품 handler 실행과 결과 저장
+- 종료 신호를 받았을 때 새 작업을 멈추고 진행 중인 일 정리
+- 로그, metric, 오류 정보 수집
+- 실행에 사용한 image, version, pool, instance, region 기록
 
-Product는 다음만 제공한다.
+제품 package가 맡을 일:
 
-- **workload handler**: 개별 실행 단위 또는 partition에서 실제로 수행할 상품 수집, 시장 데이터 구독 등의 domain 로직을 구현한다.
-- **input planner**: 하나의 Finite Workload 요청을 병렬 처리 가능한 여러 `ExecutionUnit`으로 분해하는 기준과 방법을 제공한다.
-- **payload schema**: handler가 받을 domain 입력 데이터의 필드, 타입, 필수 조건 및 호환 가능한 버전을 정의한다.
-- **partition discovery**: Continuous Workload가 현재 처리해야 할 partition 목록을 domain 정보에 근거해 찾아 runtime에 전달한다.
-- **domain-specific result/event schema**: handler가 생성하는 결과나 event의 business 의미, 필드 구조 및 검증 규칙을 정의한다.
-- **domain-specific recovery logic**: 일반적인 retry만으로 해결할 수 없는 checkpoint 복원, 외부 시스템 상태 확인, 보상 처리 등 domain 고유의 복구 절차를 구현한다.
-
----
-
-# 3. Non-Goals
-
-초기 버전은 다음을 목표로 하지 않는다.
-
-- AWS 또는 멀티클라우드 지원
-- Kubernetes abstraction
-- arbitrary remote code execution
-- 범용 DAG engine
-- exactly-once execution 보장
-- product-specific crawler 또는 collector 구현
-- domain-specific storage schema 강제
-- 범용 stream-processing engine 대체
+- 상품 수집처럼 제품에만 있는 실제 처리 코드
+- Finite 요청을 `ExecutionUnit`으로 나누는 planner
+- handler가 받을 payload의 field와 타입
+- 현재 처리해야 할 Continuous partition 목록
+- 제품 결과와 event의 의미와 형식
+- checkpoint 복구나 보상 처리처럼 제품에만 있는 복구 방법
 
 ---
 
-# 4. Core Abstractions
+# 3. 만들지 않는 것
+
+초기 버전은 아래 기능까지 해결하려 하지 않는다.
+
+- AWS와 GCP를 같은 API로 다루는 멀티클라우드 기능
+- Kubernetes 공통 계층
+- 사용자가 보낸 임의의 코드를 원격 실행하는 기능
+- 작업 순서를 그래프로 만드는 범용 DAG engine
+- 외부 부수 효과까지 포함한 exactly-once 보장
+- 특정 제품의 crawler 또는 collector
+- 제품 DB schema 강제
+- Kafka Streams 같은 범용 stream-processing engine 대체
+
+---
+
+# 4. 핵심 개념
 
 ## 4.1 Workload
 
@@ -195,13 +201,21 @@ class ExecutionUnit:
 
 ## 4.3 Continuous Workload
 
-Continuous Workload는 정해진 실행 단위를 모두 처리하면 종료되는 Finite Workload와 달리, 서비스가 운영되는 동안 외부 event를 구독하거나 데이터를 반복 수집하는 장기 실행 workload다. 하나의 workload는 서로 독립적으로 처리할 수 있는 여러 partition으로 나뉘며, Product는 `discover_partitions()`를 통해 현재 처리해야 할 partition 목록을 Runtime에 제공한다.
+Continuous workload는 서비스가 운영되는 동안 계속 실행된다. 외부 event를 구독하거나
+데이터를 반복해서 읽는 작업에 사용한다.
 
-Runtime은 발견된 각 partition을 가용한 runtime instance에 할당하고 `run_partition()`을 실행한다. 이때 하나의 partition은 lease가 유효한 동안 하나의 runtime instance만 소유한다.
+하나의 workload는 서로 따로 처리할 수 있는 여러 partition으로 나뉜다. 제품은
+`discover_partitions()`에서 지금 처리해야 할 partition 목록을 runtime에 전달한다.
 
-Lease는 특정 partition을 처리할 권한을 한 runtime instance에 일정 시간 동안만 부여하는 **만료 기한이 있는 임시 소유권**이다. 영구적인 lock과 달리 소유자가 명시적으로 해제하지 못하더라도 기한이 지나면 자동으로 무효화되며, 정상 동작 중인 instance는 heartbeat를 보내 lease를 주기적으로 갱신한다.
+runtime은 각 partition을 실행 가능한 worker에 배정하고 `run_partition()`을 호출한다.
+lease가 유효한 동안에는 worker 하나만 그 partition을 맡는다.
 
-instance가 비정상 종료되거나 heartbeat를 보내지 못하면 lease가 만료되고, Runtime은 해당 partition을 다른 instance에 재할당한다. 이를 통해 중복 처리를 최소화하면서 장애 복구, 수평 확장 및 안전한 배포 종료를 Product 코드와 분리해 처리한다.
+lease는 partition을 처리할 수 있는 **만료 시간이 있는 임시 권한**이다. worker가
+명시적으로 반납하지 못해도 시간이 지나면 자동으로 끝난다. 정상 worker는 heartbeat를
+보내고 lease를 주기적으로 연장한다.
+
+worker가 죽거나 heartbeat를 보내지 못하면 lease가 끝난다. runtime은 partition을 다른
+worker에 다시 배정한다. 이 과정은 제품 코드와 분리해 처리한다.
 
 ```python
 class ContinuousWorkload(Protocol):
@@ -280,7 +294,7 @@ async def handler(ctx, payload):
 
 ---
 
-# 5. Library Packages
+# 5. Python package 구성
 
 권장 package 구조:
 
@@ -319,7 +333,7 @@ distributed_runtime.testing
 
 ---
 
-# 6. Product Integration Model
+# 6. 제품 코드와 연결하는 방법
 
 Product repository는 runtime library를 dependency로 사용한다.
 
@@ -359,11 +373,11 @@ Runtime library는 product package를 import하고 workload registry를 구성�
 
 ---
 
-# 7. Runtime Registry
+# 7. Workload 등록소
 
 Library는 decorator 또는 explicit registration을 지원한다.
 
-## 7.1 Decorator Registration
+## 7.1 Decorator로 등록
 
 ```python
 from distributed_runtime import finite
@@ -376,7 +390,7 @@ async def snapshot(ctx, payload):
     ...
 ```
 
-## 7.2 Explicit Registration
+## 7.2 함수로 직접 등록
 
 ```python
 registry.register_finite(
@@ -398,7 +412,7 @@ registry.register_continuous(
 
 ---
 
-# 8. System Architecture
+# 8. 전체 시스템 구조
 
 ```text
                          +-------------------------+
@@ -441,9 +455,9 @@ registry.register_continuous(
 
 ---
 
-# 9. Finite Execution Plane
+# 9. Finite 작업 처리 흐름
 
-## 9.1 Submission
+## 9.1 요청 제출
 
 ```python
 client.submit(
@@ -454,7 +468,7 @@ client.submit(
 )
 ```
 
-## 9.2 Planning
+## 9.2 작은 작업으로 나누기
 
 Product-provided planner returns generic `ExecutionUnit` values.
 
@@ -468,7 +482,7 @@ async def plan(request):
         )
 ```
 
-## 9.3 Dispatch
+## 9.3 Queue로 보내기
 
 Runtime maps `execution_class` to a Pub/Sub topic.
 
@@ -485,7 +499,7 @@ compute
 
 별도 TaskRouter service는 두지 않는다. 이 mapping은 runtime configuration으로 처리한다.
 
-## 9.4 Processing
+## 9.4 Worker에서 처리하기
 
 ```text
 Execution Unit
@@ -496,16 +510,22 @@ Execution Unit
    -> Result
 ```
 
-## 9.5 Retry and Dead Letter
+## 9.5 재시도와 최종 실패
 
 Runtime은 다음을 표준화한다.
 
-- **acknowledgment deadline**: Worker가 Pub/Sub 메시지를 수신한 뒤 처리 권한을 유지할 수 있는 제한 시간이다. 처리가 끝나면 ack하고, 시간 내 완료하지 못하면 deadline을 연장하거나 메시지가 다시 전달되도록 한다.
-- **retry classification**: 발생한 오류를 재시도 가능한 오류, 영구 오류, rate limit 오류 등으로 분류하여 다음 처리 방식을 결정한다.
-- **exponential backoff metadata**: 재시도 횟수가 늘어날수록 대기 시간을 지수적으로 증가시키기 위해 현재 시도 횟수, 대기 시간 및 다음 실행 가능 시각을 기록한다.
-- **max attempts**: 하나의 `ExecutionUnit`에 허용되는 최대 실행 횟수다. 이 횟수를 초과하면 더 이상 자동 재시도하지 않고 최종 실패 또는 dead-letter로 전환한다.
-- **dead-letter metadata**: 최종 처리에 실패한 실행의 workload, payload 참조, 총 시도 횟수, 마지막 오류와 실패 시각 등을 기록하여 원인 분석과 수동 재처리에 사용한다.
-- **execution attempt records**: 최초 실행과 모든 재시도를 각각 독립된 attempt로 기록한다. 각 기록에는 실행 instance, 시작·종료 시각, 결과 상태 및 오류 정보가 포함된다.
+- **acknowledgment deadline**: worker가 Pub/Sub 메시지를 처리할 수 있는 제한 시간이다.
+  완료하면 ack한다. 시간이 더 필요하면 deadline을 연장한다.
+- **retry classification**: 오류를 재시도 가능, 영구 실패, rate limit 등으로 나눠
+  다음 행동을 정한다.
+- **exponential backoff metadata**: 시도 횟수가 늘수록 더 오래 기다리도록 현재 시도,
+  대기 시간, 다음 실행 가능 시각을 기록한다.
+- **max attempts**: unit 하나를 실행할 수 있는 최대 횟수다. 한도를 넘으면 최종 실패
+  또는 dead-letter 상태로 바꾼다.
+- **dead-letter metadata**: workload, payload 위치, 총 시도 횟수, 마지막 오류,
+  실패 시각을 기록한다. 원인 분석과 수동 재처리에 사용한다.
+- **execution attempt records**: 최초 실행과 재시도를 각각 기록한다. 실행한 worker,
+  시작·종료 시각, 결과 상태, 오류 정보를 남긴다.
 
 Product handler는 오류를 분류할 수 있다.
 
@@ -517,9 +537,9 @@ raise RateLimitedExecutionError(retry_after=60)
 
 ---
 
-# 10. Continuous Execution Plane
+# 10. Continuous 작업 처리 흐름
 
-## 10.1 Partition Discovery
+## 10.1 Partition 찾기
 
 Product implementation이 partition 목록을 제공한다.
 
@@ -533,7 +553,7 @@ async def discover_partitions():
 
 Runtime은 partition의 의미를 알 필요가 없다.
 
-## 10.2 Lease Ownership
+## 10.2 Partition 처리 권한
 
 ```text
 Runtime Instance
@@ -546,7 +566,7 @@ Runtime Instance
 
 Lease가 만료되면 다른 runtime instance가 partition을 획득할 수 있다.
 
-## 10.3 Reconciliation
+## 10.3 원하는 상태와 실제 상태 맞추기
 
 Continuous Reconciler는 다음을 비교한다.
 
@@ -566,7 +586,7 @@ expired leases
 - unassigned partition 재할당
 - terminating instance의 partition drain
 
-## 10.4 Scaling
+## 10.4 Worker 수 조절
 
 Continuous runtime pool은 초기에는 다음을 사용한다.
 
@@ -587,7 +607,7 @@ connection_count
 
 ---
 
-# 11. GCP Runtime Adapter
+# 11. GCP 연결 코드
 
 `runtime-gcp` package는 GCP integration을 제공한다.
 
@@ -604,7 +624,7 @@ distributed_runtime.gcp.sql
 
 ---
 
-# 12. GCP Resource Mapping
+# 12. Runtime 기능별 GCP 서비스
 
 | Runtime Capability | GCP Service |
 |---|---|
@@ -622,7 +642,7 @@ distributed_runtime.gcp.sql
 
 ---
 
-# 13. Runtime State Model
+# 13. DB에 저장할 runtime 상태
 
 ## 13.1 Finite State
 
@@ -654,9 +674,10 @@ Domain metadata는 JSON field 또는 product-owned table에 저장한다.
 
 ---
 
-# 14. Data Ownership
+# 14. 데이터 소유권
 
-Runtime library는 orchestration metadata만 소유한다. 아래 항목은 데이터 소유권의 경계를 설명하기 위한 대표적인 예시이며, 전체 목록을 의미하지 않는다.
+Runtime library는 작업을 조정하는 metadata만 소유한다. 아래 목록은 runtime과 제품의
+경계를 설명하는 예시이며 모든 데이터를 나열한 것은 아니다.
 
 Runtime-owned data 예시:
 
@@ -690,7 +711,7 @@ Runtime DB
 
 ---
 
-# 15. Storage Integration
+# 15. 제품 저장소와 연결
 
 Library는 storage를 강제하지 않는다.
 
@@ -722,7 +743,7 @@ registry.register_sink(
 
 ---
 
-# 16. Runtime Context
+# 16. Handler에 전달할 실행 정보
 
 Finite handler context:
 
@@ -756,7 +777,7 @@ Product code는 GCP SDK를 직접 사용하지 않고 context 기능을 사용�
 
 ---
 
-# 17. Autoscaling
+# 17. Worker 수 자동 조절
 
 ## 17.1 Finite Runtime Pools
 
@@ -794,7 +815,7 @@ runtime_pools:
 
 Partition Reconciler가 workload distribution을 담당한다.
 
-## 17.3 Future Custom Metrics
+## 17.3 앞으로 추가할 custom metric
 
 다음 지표가 필요해질 때 custom metric을 추가한다.
 
@@ -810,7 +831,7 @@ runtime_error_rate
 
 ---
 
-# 18. Failure Semantics
+# 18. 실패를 처리하는 규칙
 
 ## 18.1 Finite
 
@@ -836,7 +857,7 @@ runtime_error_rate
 
 ---
 
-# 19. Observability Contract
+# 19. 로그와 metric 규칙
 
 Runtime은 공통 metric을 제공한다.
 
@@ -874,7 +895,7 @@ product_sequence_gap_total
 
 ---
 
-# 20. Testing Package
+# 20. 사용자용 테스트 도구
 
 `runtime-testing`은 product 개발자가 local test를 작성할 수 있도록 한다.
 
@@ -911,11 +932,11 @@ await runtime.run_for(seconds=5)
 
 ---
 
-# 21. Deployment Model
+# 21. 배포 방법
 
 Runtime library는 두 방식으로 제공한다.
 
-## 21.1 Embedded SDK
+## 21.1 제품에 설치하는 SDK
 
 Product process가 SDK를 직접 import한다.
 
@@ -924,7 +945,7 @@ Product API
   + runtime client
 ```
 
-## 21.2 Managed Runtime Components
+## 21.2 별도로 배포하는 runtime component
 
 공통 runtime image를 배포하고 product package를 plugin처럼 포함한다.
 
@@ -951,7 +972,7 @@ COPY runtime.yaml /app/runtime.yaml
 
 ---
 
-# 22. Recommended Repository Split
+# 22. 권장 저장소 분리
 
 ## Runtime Repository
 
@@ -986,7 +1007,7 @@ Runtime repository에는 특정 쇼핑몰, 리셀 플랫폼 또는 시장 이름
 
 ---
 
-# 23. Public API Sketch
+# 23. 목표 공개 API 예시
 
 ```python
 from distributed_runtime import RuntimeApplication
@@ -1034,7 +1055,7 @@ run = await app.client.submit(
 
 ---
 
-# 24. MVP Scope
+# 24. 단계별 구현 범위
 
 ## Phase 1: Runtime Core
 
@@ -1085,39 +1106,40 @@ run = await app.client.submit(
 
 ---
 
-# 25. Key Architectural Decisions
+# 25. 중요한 설계 결정
 
-## ADR-001: Runtime Is a Library, Not a Product
+## ADR-001: Runtime은 제품이 아니라 library다
 
 **Decision:** 특정 수집 대상과 domain logic을 runtime repository에 포함하지 않는다.
 
 **Reason:** 여러 제품이 동일한 distributed execution capability를 dependency로 재사용해야 한다.
 
-## ADR-002: Two Generic Workload Modes
+## ADR-002: 공통 workload 종류는 두 개다
 
 **Decision:** `FiniteWorkload`와 `ContinuousWorkload`를 core abstraction으로 제공한다.
 
 **Reason:** batch-style execution과 stateful long-running execution은 서로 다른 lifecycle을 가진다.
 
-## ADR-003: Domain-Neutral Naming
+## ADR-003: 제품에 치우치지 않은 이름을 쓴다
 
-**Decision:** `crawler`, `collector`, `market`, `product` 같은 이름을 core API와 repository structure에서 사용하지 않는다.
+**Decision:** `crawler`, `collector`, `market`, `product`처럼 특정 제품을 떠올리게 하는
+이름을 core API와 저장소 구조에서 사용하지 않는다.
 
 **Reason:** library abstraction이 특정 use case에 종속되어 보이는 것을 방지한다.
 
-## ADR-004: Product Owns Domain Data
+## ADR-004: 제품 데이터는 제품이 소유한다
 
 **Decision:** Runtime은 orchestration metadata만 소유한다.
 
 **Reason:** product-specific schema와 data lifecycle이 runtime에 결합되는 것을 방지한다.
 
-## ADR-005: GCP Native Autoscaling First
+## ADR-005: 먼저 GCP 기본 autoscaling을 사용한다
 
 **Decision:** VM lifecycle은 GCP MIG native autoscaler에 맡긴다.
 
 **Reason:** Runtime은 workload semantics와 partition coordination에 집중해야 한다.
 
-## ADR-006: Product Package Injection
+## ADR-006: 제품 코드는 package로 주입한다
 
 **Decision:** 공통 runtime image에 product wheel과 configuration을 추가하는 배포 모델을 지원한다.
 
@@ -1125,20 +1147,24 @@ run = await app.client.submit(
 
 ---
 
-# 26. Success Criteria
+# 26. 완료 기준
 
 ## Library
 
-> 새로운 제품이 runtime package를 dependency로 추가하고, domain handler와 configuration만 작성하여 GCP 분산 실행 환경을 구성할 수 있어야 한다.
+> 새 제품은 runtime package를 설치하고 제품 handler와 설정만 작성해 GCP 분산 실행
+> 환경을 만들 수 있어야 한다.
 
 ## Finite Workload
 
-> Product가 planner와 handler를 등록하면 Runtime이 execution unit 생성, Pub/Sub dispatch, retry, dead-letter, autoscaling, 상태 기록을 처리해야 한다.
+> 제품이 planner와 handler를 등록하면 runtime이 unit 생성, Pub/Sub 전송, 재시도,
+> 최종 실패, worker 수 조절, 상태 기록을 맡아야 한다.
 
 ## Continuous Workload
 
-> Product가 partition discovery와 partition handler를 등록하면 Runtime이 lease, heartbeat, failure recovery, reassignment, graceful shutdown을 처리해야 한다.
+> 제품이 partition 발견 코드와 handler를 등록하면 runtime이 lease, heartbeat,
+> 장애 복구, 재배치, 안전한 종료를 맡아야 한다.
 
 ## Isolation
 
-> Runtime core repository를 열어보았을 때 특정 쇼핑몰, 거래소, 리셀 플랫폼 또는 시장 데이터 수집기의 구현이 존재하지 않아야 한다.
+> Runtime core 저장소에는 특정 쇼핑몰, 거래소, 리셀 플랫폼, 시장 데이터 수집기
+> 전용 구현이 없어야 한다.
