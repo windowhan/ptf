@@ -1,8 +1,11 @@
 # 빠른 시작
 
-이 문서는 현재 구현된 계약 계층을 가장 짧게 사용하는 방법을 설명한다.
-아직 worker나 GCP adapter는 없으므로, 예제의 목표는 workload를 **등록하고 계약을
-검증하는 것**이다.
+이 문서는 현재 코드를 직접 사용해 보는 가장 짧은 예제다.
+
+아직 실제 worker나 GCP 연결 코드는 없다. 여기서는 다음 두 가지만 해본다.
+
+1. workload를 registry에 등록한다.
+2. 입력과 planner 결과가 정해진 규칙에 맞는지 확인한다.
 
 ## 요구 사항
 
@@ -24,7 +27,7 @@ uv run python -c \
 
 ## Application 생성
 
-제품 통합의 최상위 객체는 `RuntimeApplication`이다.
+제품 코드에서는 `RuntimeApplication`으로 시작한다.
 
 ```python
 from distributed_runtime import RuntimeApplication
@@ -32,12 +35,16 @@ from distributed_runtime import RuntimeApplication
 app = RuntimeApplication("sample-service")
 ```
 
-application 이름은 workload, artifact, registry identity의 namespace로 사용된다.
-생성된 `app.registry`에 Finite/Continuous workload와 sink를 등록한다.
+application 이름은 서로 다른 제품의 workload가 섞이지 않게 구분하는 값이다.
+artifact를 만들 때도 같은 application 이름을 넣는 것을 권장한다.
+
+생성된 `app.registry`에는 Finite workload, Continuous workload, sink를 등록할 수
+있다.
 
 ## 최소 Finite workload
 
-Finite planner는 immutable request를 받아 async iterator로 `ExecutionUnit`을 생성한다.
+Finite planner는 하나의 요청을 받아 작은 작업인 `ExecutionUnit`을 하나씩 만든다.
+요청 값은 planner 실행 중 바뀌지 않는다.
 
 ```python
 from collections.abc import AsyncIterator, Mapping
@@ -86,16 +93,16 @@ app.registry.register_finite(
 )
 ```
 
-등록 시 다음 조건이 검증된다.
+등록하면 다음 내용을 바로 확인한다.
 
-- 등록 name과 planner의 `name`이 동일하다.
-- 등록 version과 planner의 `version`이 동일하다.
-- planner mode가 `WorkloadMode.FINITE`다.
-- semantic version이 ASCII SemVer 2.0 형식이다.
-- 동일한 application/name/version/mode가 중복되지 않는다.
+- 등록할 때 적은 이름과 planner의 `name`이 같다.
+- 등록할 때 적은 버전과 planner의 `version`이 같다.
+- planner가 자신을 Finite 작업으로 선언했다.
+- 버전이 `1.0.0` 같은 ASCII SemVer 형식이다.
+- 같은 application, 이름, 버전, 실행 종류가 이미 등록되지 않았다.
 
-이 코드는 unit을 실제 queue에 발행하거나 handler를 실행하지 않는다. 계획을
-검증하려면 `validate_plan()`을 명시적으로 호출한다.
+여기까지 실행해도 작업이 queue로 보내지거나 handler가 실행되지는 않는다.
+planner가 만든 결과를 확인하려면 `validate_plan()`을 따로 호출한다.
 
 ## 계획 검증
 
@@ -114,18 +121,18 @@ request = WorkloadRequest(
 units = await validate_plan(request, GreetingPlanner())
 ```
 
-`validate_plan()`은 다음을 확인한다.
+`validate_plan()`은 planner의 결과를 끝까지 읽고 다음 내용을 확인한다.
 
-- `unit_key` 중복 여부
-- payload의 canonical SHA-256
-- planner 출력 순서
-- 이전 durable planning record와의 drift
-- cooperative cancellation
+- 같은 `unit_key`가 두 번 나오지 않았는지
+- payload를 항상 같은 방식으로 계산한 SHA-256
+- planner가 unit을 내보낸 순서
+- DB에 저장했던 이전 계획과 지금 계획이 달라지지 않았는지
+- 실행 중 중단 요청이 들어왔는지
 
 ## 최소 Continuous workload
 
-Continuous workload는 원하는 partition 집합을 발견하고 각 partition을 lease 하에서
-처리하는 계약이다.
+Continuous workload는 계속 처리해야 할 대상을 여러 partition으로 나눈다. 실제
+worker는 각 partition의 일정 시간 처리 권한인 lease를 얻은 뒤 작업한다.
 
 ```python
 from collections.abc import Sequence
@@ -170,12 +177,14 @@ app.registry.register_continuous(
 )
 ```
 
-실제 partition 정규화에는 `discover_partitions()` helper를 사용한다. helper는 결과를
-`PartitionId` 순으로 정렬하고 중복 ID를 거부한다.
+partition 목록을 확인하려면 `discover_partitions()` helper를 사용한다. 이 함수는
+목록을 `PartitionId` 순으로 정렬한다. 같은 ID가 두 번 나오면 오류를 발생시킨다.
 
 ## 다음 문서
 
-- 실행 identity와 drift가 중요하면 [Finite workload](concepts/finite-workloads.md)
-- lease/fencing이 중요하면 [Continuous workload](concepts/continuous-workloads.md)
-- 전송 payload를 만들려면 [Envelope와 artifact](reference/envelopes-and-artifacts.md)
-- pool 설정을 만들려면 [Configuration](reference/configuration.md)
+- 처음 보는 용어가 있으면 [쉬운 용어 설명](glossary.md)
+- 실행 ID와 계획 변경 검사가 궁금하면 [Finite workload](concepts/finite-workloads.md)
+- lease와 오래된 worker 차단이 궁금하면
+  [Continuous workload](concepts/continuous-workloads.md)
+- 전송 메시지를 만들려면 [Envelope와 artifact](reference/envelopes-and-artifacts.md)
+- worker 묶음과 DB 연결 수를 설정하려면 [Configuration](reference/configuration.md)

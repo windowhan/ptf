@@ -1,40 +1,43 @@
 # Distributed Runtime 문서
 
-이 디렉터리는 `distributed-runtime`의 설계 목표, 현재 구현, 사용 방법, 공개 계약,
-검증 기준을 설명한다.
+이 디렉터리에는 `distributed-runtime`을 이해하고 사용하는 데 필요한 문서가 있다.
+처음부터 모든 문서를 읽을 필요는 없다. 아래 읽기 순서에서 자신의 목적에 맞는 문서를
+고르면 된다.
 
 가장 중요한 구분은 다음 두 가지다.
 
-- **현재 구현:** Milestone01에서 완료된 domain-neutral 계약 계층
-- **목표 아키텍처:** Cloud SQL, Pub/Sub, MIG, Terraform을 포함한 Phase 1~5 전체 구조
+- **지금 사용할 수 있는 기능:** Milestone01에서 만든 공통 작업 규칙
+- **앞으로 만들 기능:** Cloud SQL, Pub/Sub, MIG, Terraform을 사용하는 실제 실행 환경
 
-`docs/first.md`에는 최종 목표까지 포함되어 있으므로, 현재 사용할 수 있는 기능을
-확인하려면 반드시 이 문서와 `architecture/current-contract-layer.md`부터 읽는다.
+`first.md`는 최종 모습까지 설명한다. 지금 코드에서 바로 쓸 수 있는 기능을 알고
+싶다면 이 문서와 `architecture/current-contract-layer.md`부터 읽는다.
+
+낯선 단어가 나오면 [쉬운 용어 설명](glossary.md)을 참고한다.
 
 ## 현재 상태
 
 현재 버전은 `distributed-runtime 0.1.0`이며 다음 범위가 구현되어 있다.
 
-- typed identifier와 상태 enum
-- 구조화된 오류 분류
-- canonical V1 envelope
-- immutable artifact reference
-- typed runtime configuration과 DB connection capacity 검증
-- Finite planner/handler/context 계약
-- Continuous partition/lease/sink/context 계약
-- workload/sink registry와 최소 application facade
-- deadline, cancellation, graceful shutdown, structured logging
-- API/envelope/config compatibility snapshot
+- 형식이 잘못된 값을 거부하는 ID와 상태 값
+- 종류와 재시도 가능 여부를 담는 오류
+- 같은 데이터를 항상 같은 bytes로 만드는 V1 메시지
+- 저장된 파일의 위치와 내용이 맞는지 확인하는 참조
+- DB 연결 한도를 넘지 않는지 확인하는 runtime 설정
+- Finite 작업을 나누고 처리하는 Python 규칙
+- Continuous 작업의 구역, 소유권, 결과 전송 규칙
+- workload와 sink를 등록하고 찾는 registry
+- 마감 시각, 작업 중단, 안전한 종료, 구조화 로그
+- 공개 API와 메시지 형식의 실수 변경을 잡는 기준 파일
 
 다음 항목은 아직 구현되지 않았다.
 
-- Cloud SQL repository와 migration
-- Pub/Sub publisher/subscriber
-- finite/continuous worker loop
-- transactional outbox와 retry dispatcher
-- continuous reconciler와 실제 lease transaction
-- GCP client adapter
-- Terraform 및 실제 GCP E2E
+- Cloud SQL에 상태를 저장하고 읽는 코드와 DB 변경 파일
+- Pub/Sub으로 메시지를 보내고 받는 코드
+- Finite/Continuous 작업을 실제로 실행하는 worker
+- DB 변경과 메시지 발행을 함께 안전하게 처리하는 outbox
+- 실패한 작업의 다음 실행 시각을 관리하는 retry dispatcher
+- Continuous partition 소유권을 실제 DB에서 관리하는 조정 작업
+- GCP client 연결, Terraform, 실제 GCP 전체 경로 검증
 
 ## 권장 읽기 순서
 
@@ -44,7 +47,8 @@
 2. [현재 계약 계층 아키텍처](architecture/current-contract-layer.md)
 3. [Finite workload](concepts/finite-workloads.md) 또는
    [Continuous workload](concepts/continuous-workloads.md)
-4. 필요한 [레퍼런스](#레퍼런스)
+4. 모르는 말이 있으면 [쉬운 용어 설명](glossary.md)
+5. 필요한 [레퍼런스](#레퍼런스)
 
 ### 런타임 구현자
 
@@ -69,6 +73,7 @@
 |---|---|
 | [빠른 시작](getting-started.md) | 패키지 설치, application 생성, workload 등록 |
 | [현재 계약 계층](architecture/current-contract-layer.md) | 지금 구현된 구조와 미구현 경계 |
+| [쉬운 용어 설명](glossary.md) | 분산 실행과 GCP 용어를 짧게 풀이 |
 
 ### 개념
 
@@ -96,12 +101,12 @@
 
 ## 문서의 기준
 
-- 코드가 문서와 다르면 현재 구현에 대해서는 코드와 테스트가 우선한다.
-- 장래 설계는 `first.md`와 `implementation-plan.md`가 기준이다.
-- public API는 각 package의 `__all__`과 compatibility snapshot으로 확인한다.
+- 현재 기능에 대해 코드와 문서의 설명이 다르면 코드와 테스트를 기준으로 판단한다.
+- 앞으로 만들 기능은 `first.md`와 `implementation-plan.md`를 기준으로 판단한다.
+- 공개 API는 각 package의 `__all__`과 호환성 기준 파일로 확인한다.
 - 예제는 Python 3.12 이상을 기준으로 한다.
-- 문서에서 “검증한다”는 표현은 생성자나 helper가 현재 실제로 검증하는 경우에만 쓴다.
-- 문서에서 “실행한다”는 표현은 실제 worker/adapter가 존재할 때만 쓴다.
+- “검증한다”는 말은 현재 코드가 잘못된 입력을 실제로 거부할 때만 쓴다.
+- “실행한다”는 말은 실제 worker 또는 adapter가 있을 때만 쓴다.
 
 ## 저장소 기준점
 
@@ -110,5 +115,5 @@
 - branch: `feat/milestone-01-contracts`
 - package version: `0.1.0`
 - Python: `>=3.12`
-- runtime dependencies: 없음
-- local verification: 164 tests, 95% branch coverage
+- 실행에 필요한 외부 Python package: 없음
+- 로컬 검증 결과: 164개 테스트, branch coverage 95%
