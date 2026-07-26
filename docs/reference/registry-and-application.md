@@ -1,8 +1,8 @@
-# Registry와 application 레퍼런스
+# Registry와 application: 작업 등록하기
 
 ## RuntimeApplication
 
-제품 통합의 최소 root facade다.
+제품 코드가 runtime을 사용할 때 만드는 첫 번째 객체다.
 
 ```python
 from distributed_runtime import RuntimeApplication
@@ -11,41 +11,44 @@ app = RuntimeApplication("sample-service")
 registry = app.registry
 ```
 
-application 이름은 `WorkloadId` 규칙으로 검증되고 registry namespace가 된다.
+application 이름은 서로 다른 제품의 등록 내용이 섞이지 않게 구분한다. 이름은
+`WorkloadId`와 같은 규칙으로 검사한다.
 
-최상위 `distributed_runtime` package가 공개하는 값은 다음 두 개뿐이다.
+최상위 `distributed_runtime` package에서는 자주 쓰는 다음 두 값만 바로 제공한다.
 
 - `RuntimeApplication`
 - `__version__`
 
-세부 계약은 `distributed_runtime.core`, `.finite`, `.continuous`에서 명시적으로
-import한다.
+나머지 타입은 역할을 분명히 알 수 있도록 `distributed_runtime.core`, `.finite`,
+`.continuous`에서 직접 불러온다.
 
 ## RuntimeRegistry
 
-registry는 startup composition root다. workload와 sink를 등록하고 조회한다.
+registry는 프로그램 시작 시 workload와 sink를 모아 두는 곳이다. 이름과 버전으로
+등록한 항목을 나중에 다시 찾을 수 있다.
 
-내부 상태는 mutable하며 동시 등록을 위한 thread-safe container가 아니다. process가
-요청을 처리하기 전에 한 번 구성하고 이후 read-only로 사용하는 방식을 권장한다.
+등록할 때는 내부 값이 바뀐다. 여러 thread가 동시에 등록하도록 만든 객체는 아니다.
+요청을 받기 전에 한 thread에서 등록을 끝낸 뒤, 실행 중에는 조회만 하는 방식을
+권장한다.
 
-## Workload identity
+## 어떤 등록이 같은 workload인가
 
-workload의 전체 identity:
+workload 하나를 구분하려면 다음 네 값이 모두 필요하다.
 
 ```text
 application + workload_name + semantic_version + mode
 ```
 
-이를 `WorkloadIdentity`가 표현한다.
+이 네 값을 `WorkloadIdentity`가 한 객체로 묶는다.
 
 같은 application/name이라도 다음은 서로 다른 등록이다.
 
 - `1.0.0`과 `2.0.0`
 - Finite `1.0.0`과 Continuous `1.0.0`
 
-전체 identity가 같은 중복만 거부한다.
+네 값이 모두 같은 경우만 중복으로 거부한다.
 
-## Finite 등록
+## 끝나는 작업 등록하기
 
 ```python
 registration = app.registry.register_finite(
@@ -57,17 +60,17 @@ registration = app.registry.register_finite(
 )
 ```
 
-생성되는 `FiniteRegistration`:
+등록 결과에는 다음 값이 들어간다.
 
 - application
 - name
 - semantic version
-- execution class
+- 사용할 worker 종류인 execution class
 - planner
 - handler
-- 계산된 mode `finite`
+- 자동으로 정해진 mode `finite`
 
-planner는 다음 declaration을 가져야 한다.
+planner 클래스도 자신이 누구인지 다음처럼 선언해야 한다.
 
 ```python
 name = "daily-report"
@@ -75,9 +78,10 @@ version = "1.2.0"
 mode = WorkloadMode.FINITE
 ```
 
-등록 인자와 declaration이 정확히 일치하지 않으면 실패한다.
+함수에 전달한 이름·버전·mode와 planner의 선언이 하나라도 다르면 등록에 실패한다.
+오타가 있는 workload를 잘못된 이름으로 실행하는 일을 막기 위한 검사다.
 
-## Continuous 등록
+## 계속되는 작업 등록하기
 
 ```python
 registration = app.registry.register_continuous(
@@ -88,20 +92,21 @@ registration = app.registry.register_continuous(
 )
 ```
 
-생성되는 `ContinuousRegistration`:
+등록 결과에는 다음 값이 들어간다.
 
 - application
 - name
 - semantic version
-- execution class
+- 사용할 worker 종류인 execution class
 - workload
-- 계산된 mode `continuous`
+- 자동으로 정해진 mode `continuous`
 
-workload declaration도 name/version/mode가 등록 인자와 일치해야 한다.
+workload 클래스의 이름·버전·mode도 함수에 전달한 값과 같아야 한다.
 
-## SemVer 규칙
+## 버전 문자열 규칙
 
-registry version은 완전한 ASCII SemVer 2.0 형식을 사용한다.
+workload 버전은 SemVer 2.0 형식을 사용한다. 기본 모양은 `주버전.부버전.수버전`이다.
+예를 들어 `1.2.3`은 주버전 1, 부버전 2, 수버전 3을 뜻한다.
 
 유효:
 
@@ -129,13 +134,13 @@ registry version은 완전한 ASCII SemVer 2.0 형식을 사용한다.
 v1.2.3
 ```
 
-major/minor/patch와 numeric prerelease의 숫자는 `[0-9]`만 허용한다. Arabic-Indic 같은
-Unicode decimal digit은 Python의 숫자 문자로 인식되더라도 거부한다.
+숫자에는 ASCII `0`부터 `9`까지만 사용할 수 있다. 다른 언어권의 숫자 문자가 Python에서
+숫자로 인식되더라도 버전에서는 거부한다.
 
-digit-leading alphanumeric prerelease는 허용하지만 순수 numeric identifier의 leading
-zero는 금지한다. 따라서 `01a`는 유효하고 `01`은 무효다.
+시험 배포 이름처럼 숫자와 문자가 섞인 `01a`는 허용한다. 숫자만 있는 항목은 앞에
+불필요한 0을 붙일 수 없으므로 `01`은 허용하지 않는다.
 
-## 조회
+## 등록한 workload 찾기
 
 ```python
 registration = app.registry.workload(
@@ -145,53 +150,58 @@ registration = app.registry.workload(
 )
 ```
 
-name/version/mode 전체를 제공해야 한다. 없으면 `RegistrationError`다.
+이름, 버전, mode를 모두 전달해야 한다. 일치하는 등록이 없으면
+`RegistrationError`가 발생한다.
 
-전체 workload는 identity 정렬 순서의 tuple로 조회한다.
+등록된 전체 workload는 identity 순으로 정렬된 tuple로 받을 수 있다.
 
 ```python
 all_workloads = app.registry.workloads()
 ```
 
-## Sink 등록
+## 결과를 보낼 sink 등록하기
 
 ```python
 app.registry.register_sink("events", sink)
 registered_sink = app.registry.sink("events")
 ```
 
-sink name은 non-empty trimmed string이며 같은 이름을 중복 등록할 수 없다.
+sink 이름은 비어 있거나 앞뒤에 공백이 있으면 안 된다. 같은 이름은 한 번만 등록할 수
+있다.
 
-현재 registry는 sink의 guarantee에 따라 adapter를 자동 선택하거나 설정과 연결하지
-않는다. 후속 bootstrap 계층이 `RuntimeConfig`와 registry를 조합해야 한다.
+현재 registry는 sink의 보호 수준을 보고 GCP adapter를 자동으로 선택하지 않는다.
+sink 설정과 `RuntimeConfig`를 서로 연결하는 시작 코드도 앞으로 구현해야 한다.
 
-## RegistrationError가 발생하는 경우
+## 등록이나 조회가 실패하는 경우
 
-- 빈 name/execution class/sink name
+- 이름, execution class, sink 이름이 비어 있거나 앞뒤에 공백이 있음
 - 잘못된 SemVer
-- 동일 workload identity 중복
-- planner/workload declaration 불일치
+- 같은 workload identity를 두 번 등록
+- 함수에 전달한 값과 planner/workload 선언이 다름
 - sink 이름 중복
-- 존재하지 않는 workload/sink 조회
+- 등록되지 않은 workload 또는 sink 조회
 
-## Public API 안정성
+## 공개 API가 실수로 바뀌지 않게 확인하기
 
-public surface는 다음 세 층으로 관리한다.
+사용자 코드가 의존할 수 있는 공개 이름은 다음 세 곳에서 확인한다.
 
 1. package별 `__all__`
 2. `tests/contract/snapshots/api.json`
 3. `tests/contract/test_public_api.py`
 
-공개 symbol을 추가·삭제·이동할 때는 compatibility snapshot을 의도적으로 갱신하고
-버전 정책을 검토해야 한다.
+공개 클래스나 함수를 추가, 삭제, 이동할 때는 기준 파일을 직접 갱신한다. 단순한
+snapshot 업데이트로 넘기지 말고 기존 사용자 코드가 깨지는지와 package 버전을 함께
+검토한다.
 
-## 후속 bootstrap 권장 순서
+## 프로그램을 시작할 때 권장하는 순서
 
-1. 외부 설정을 `RuntimeConfig`로 검증한다.
+1. 외부 설정을 읽고 `RuntimeConfig`로 검사한다.
 2. `RuntimeApplication`을 생성한다.
-3. product package에서 workload/sink factory를 import한다.
-4. 명시적으로 registry에 등록한다.
-5. registration의 execution class가 config에 존재하는지 검증한다.
-6. registry를 worker/control component에 read-only로 전달한다.
+3. 제품 package에서 workload와 sink를 만드는 함수를 불러온다.
+4. workload와 sink를 registry에 직접 등록한다.
+5. 등록된 execution class가 config에 실제로 있는지 확인한다.
+6. 등록이 끝난 registry를 worker와 control component에 전달한다.
 
-decorator 기반 global side effect보다 위 순서의 explicit registration을 기본으로 한다.
+module을 import하는 순간 몰래 등록되는 decorator 방식보다 위처럼 등록 위치가 보이는
+방식을 기본으로 한다. 그래야 테스트와 시작 과정에서 어떤 workload가 들어갔는지 쉽게
+확인할 수 있다.
