@@ -1,6 +1,11 @@
 # GCP Distributed Workload Runtime
 ## Library-Oriented Architecture Document
 
+> 이 문서는 Phase 1~5 전체 **목표 아키텍처**를 설명한다.
+> 현재 Milestone01에서 실제 구현된 계약 계층과 미구현 경계는
+> [`docs/README.md`](README.md)와
+> [`현재 계약 계층 아키텍처`](architecture/current-contract-layer.md)를 먼저 참고한다.
+
 **Status:** Final Draft  
 **Version:** 1.1  
 **Target platform:** Google Cloud Platform  

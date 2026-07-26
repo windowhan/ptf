@@ -1,5 +1,9 @@
 # GCP Distributed Workload Runtime 구현 세부 계획
 
+> 이 문서는 Phase 1~5의 **구현 로드맵**이다.
+> 현재 Milestone01 구현의 사용법과 정확한 공개 계약은
+> [`docs/README.md`](README.md)에서 시작한다.
+
 ## 1. 목표와 범위
 
 `docs/first.md`의 Phase 1~5를 모두 구현한다. 최초 릴리스는 한 사람이 관리하는 단일 GCP 프로젝트·단일 리전의 private internal runtime이며, domain-neutral Finite/Continuous examples를 실제 GCP에 배포해 E2E 완료를 증명한다.
