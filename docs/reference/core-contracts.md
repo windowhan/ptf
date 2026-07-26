@@ -1,45 +1,49 @@
-# Core contracts 레퍼런스
+# Core contracts: 공통 규칙
 
-`distributed_runtime.core`는 Finite, Continuous, adapter가 공유하는 가장 낮은 계층이다.
-이 모듈은 GCP SDK나 데이터베이스 client에 의존하지 않는다.
+`distributed_runtime.core`에는 Finite와 Continuous 작업이 함께 사용하는 기본 타입이
+있다. ID, 상태, 오류, 시간, 중단, 로그처럼 어떤 작업에도 필요한 기능을 모아 둔다.
 
-## Identifier
+이 package는 GCP SDK나 데이터베이스 client를 사용하지 않는다.
 
-모든 identifier는 frozen/slots/order dataclass다.
+## 형식을 검사하는 ID
 
-허용 형식:
+`RunId`, `ExecutionId` 같은 identifier는 일반 문자열처럼 보이지만 만들 때 형식을
+확인한다. 한 번 만든 ID의 값은 바꿀 수 없고 문자열 값으로 정렬할 수 있다.
+
+허용하는 문자:
 
 ```text
 ^[A-Za-z0-9][A-Za-z0-9._:/-]*$
 ```
 
-공통 규칙:
+모든 ID가 따르는 규칙:
 
 - 빈 문자열 금지
-- 선행·후행 공백 금지
+- 앞뒤 공백 금지
 - 최대 255자
 - 첫 문자는 ASCII 영숫자
 - 생성 뒤 값 변경 불가
 - 문자열 값 기준 정렬 가능
-- `str(identifier)`는 원래 value 반환
-- `ConcreteIdentifier.parse(value)` 지원
+- `str(identifier)`로 원래 문자열 확인
+- 각 ID 클래스의 `parse(value)`로 문자열 변환
 
-| 타입 | 의미 |
+| 타입 | 무엇을 구분하는가 |
 |---|---|
-| `WorkloadId` | application 또는 workload의 안정적인 ID |
-| `RevisionId` | planner/handler/runtime revision |
-| `RunId` | Finite submission |
-| `ExecutionId` | Finite execution unit |
-| `DeploymentId` | Continuous deployment |
-| `PartitionId` | Continuous partition |
-| `RuntimeInstanceId` | worker process/VM |
-| `ArtifactId` | immutable artifact |
+| `WorkloadId` | application 또는 workload |
+| `RevisionId` | planner, handler, runtime의 배포 버전 |
+| `RunId` | 한 번 제출한 Finite 요청 |
+| `ExecutionId` | Finite 실행 단위 하나 |
+| `DeploymentId` | Continuous 배포 하나 |
+| `PartitionId` | Continuous 처리 구역 하나 |
+| `RuntimeInstanceId` | worker process 또는 VM 하나 |
+| `ArtifactId` | 내용이 고정된 외부 파일 하나 |
 
-잘못된 값은 `InvalidIdentifierError`이며 details에 `identifier_kind`와 입력값을 담는다.
+형식이 잘못되면 `InvalidIdentifierError`가 발생한다. 오류의 `details`에는 어떤 종류의
+ID였는지와 실제 입력값이 들어간다.
 
-## 상태 enum
+## 저장소와 API가 함께 쓰는 상태 이름
 
-모든 enum은 문자열 직렬화가 가능한 `StrEnum`이다.
+상태 enum은 문자열로 저장하고 전송할 수 있는 `StrEnum`이다.
 
 ### `WorkloadMode`
 
@@ -52,7 +56,8 @@
 pending → planning → running → succeeded | failed | cancelled
 ```
 
-상태 전이 엔진은 아직 구현되지 않았다. enum은 저장소와 API가 공유할 vocabulary다.
+현재는 허용할 상태 이름만 정의한다. 예를 들어 `running`에서 `succeeded`로 바꾸는
+상태 전이 코드는 아직 없다. 후속 DB와 API가 같은 문자열을 사용하도록 미리 정한 것이다.
 
 ### `ExecutionStatus`
 
@@ -82,23 +87,25 @@ pending → planning → running → succeeded | failed | cancelled
 - `failed`
 - `inactive`
 
-## 구조화 오류
+## 코드가 판단할 수 있는 오류
 
-`distributed_runtime.core.errors`가 정의하는 구조화 오류는
-`RuntimeContractError`를 상속한다.
+`distributed_runtime.core.errors`의 오류는 모두 `RuntimeContractError`를 상속한다.
+사람이 읽을 메시지뿐 아니라 프로그램이 다음 행동을 정할 정보도 함께 담는다.
 
-모든 public validation 실패가 이 계층을 사용하는 것은 아니다. registry 등록 실패는
-`RegistrationError`, 일반 value-object와 Finite/Continuous 계약의 잘못된 입력은
-`ValueError` 또는 `TypeError`가 될 수 있다. 따라서 외부 boundary에서 오류를
-정규화하려면 구조화 오류뿐 아니라 해당 API가 명시한 표준 예외도 처리해야 한다.
+하지만 모든 잘못된 입력이 `RuntimeContractError`인 것은 아니다.
 
-공통 속성:
+- registry 등록 실패: `RegistrationError`
+- 일반 값 검증 실패: `ValueError` 또는 `TypeError`
 
-- `code`: 안정적인 machine-readable string
-- `kind`: `ErrorKind`
-- `message`: 비어 있지 않은 진단
-- `retryable`: runtime retry 가능 여부
-- `details`: 재귀적으로 immutable한 JSON-compatible mapping
+API나 worker에서 오류 형식을 하나로 맞출 때는 이 표준 예외도 함께 처리해야 한다.
+
+구조화 오류에 공통으로 들어가는 값:
+
+- `code`: 프로그램이 비교할 수 있는 고정된 오류 코드
+- `kind`: 오류 종류를 나타내는 `ErrorKind`
+- `message`: 사람이 읽을 설명
+- `retryable`: 자동으로 다시 시도해도 되는지
+- `details`: 만든 뒤 바뀌지 않는 추가 정보
 
 ```python
 try:
@@ -119,40 +126,40 @@ except RuntimeContractError as error:
 }
 ```
 
-| 오류 | 기본 retry | 의미 |
+| 오류 | 자동 재시도 | 쉬운 뜻 |
 |---|---:|---|
-| `InvalidIdentifierError` | 아니오 | identifier lexical contract 위반 |
-| `InvariantViolationError` | 아니오 | runtime 내부 불변식 위반 |
-| `PlanningDriftError` | 아니오 | durable plan과 retry plan 불일치 |
-| `CancelledExecutionError` | 아니오 | 실행 취소 |
-| `RetryableExecutionError` | 예 | 자동 재시도 가능한 제품 오류 |
-| `PermanentExecutionError` | 아니오 | 자동 재시도하면 안 되는 제품 오류 |
-| `RateLimitedExecutionError` | 예 | 최소 retry delay가 있는 오류 |
-| `UnsupportedVersionError` | 아니오 | 해석할 수 없는 contract version |
+| `InvalidIdentifierError` | 아니오 | ID 형식이 잘못됨 |
+| `InvariantViolationError` | 아니오 | 반드시 지켜야 할 내부 규칙이 깨짐 |
+| `PlanningDriftError` | 아니오 | 이전 계획과 다시 만든 계획이 다름 |
+| `CancelledExecutionError` | 아니오 | 실행이 취소됨 |
+| `RetryableExecutionError` | 예 | 잠시 뒤 다시 시도할 수 있는 제품 오류 |
+| `PermanentExecutionError` | 아니오 | 다시 시도해도 해결되지 않는 제품 오류 |
+| `RateLimitedExecutionError` | 예 | 지정한 시간만큼 기다린 뒤 재시도할 오류 |
+| `UnsupportedVersionError` | 아니오 | 현재 코드가 읽을 수 없는 형식 버전 |
 
-`RateLimitedExecutionError`는 positive `timedelta`를 요구하고
-`retry_after_seconds`를 details에 추가한다.
+`RateLimitedExecutionError`에는 0초보다 큰 대기 시간을 넣어야 한다. 초 단위 값은
+`details["retry_after_seconds"]`에서 확인할 수 있다.
 
-### Error details 규칙
+### 오류의 추가 정보에 넣을 수 있는 값
 
 허용:
 
-- string, exact integer, boolean, finite float, `None`
+- 문자열, 정확한 정수, boolean, 유한한 float, `None`
 - list/tuple
-- 문자열 key를 가진 mapping
+- 문자열 key를 가진 key-value 데이터
 
 금지:
 
-- 비문자 mapping key
+- 문자열이 아닌 key
 - NaN/Infinity
-- set, arbitrary object
+- set 또는 임의의 Python 객체
 
-입력 mapping이 비어 있지 않지만 falsey하게 동작하는 custom mapping이어도 버리지 않고
-명시적으로 보존한다.
+특별하게 만든 mapping이 `False`처럼 평가되더라도 실제 항목이 있으면 버리지 않는다.
 
-## Clock와 Deadline
+## 테스트할 수 있는 시각과 마감 시간
 
-`Clock` Protocol:
+코드에서 `datetime.now()`를 직접 부르면 시간 관련 테스트가 어려워진다. `Clock`
+규칙을 사용하면 운영에서는 실제 시각을, 테스트에서는 원하는 시각을 넣을 수 있다.
 
 ```python
 class Clock(Protocol):
@@ -160,9 +167,9 @@ class Clock(Protocol):
     def monotonic(self) -> float: ...
 ```
 
-- `SystemClock`: UTC wall clock와 process monotonic clock 사용
-- `FakeClock`: 테스트가 명시적으로 시간을 전진
-- `Deadline`: monotonic expiry만 사용
+- `SystemClock`: 실제 UTC 시각과 process의 단조 증가 시각 사용
+- `FakeClock`: 테스트 코드가 원하는 만큼 시간을 이동
+- `Deadline`: 시스템 시각 변경의 영향을 받지 않는 단조 증가 시각으로 만료 계산
 
 ```python
 clock = FakeClock()
@@ -171,13 +178,15 @@ clock.advance(10)
 assert deadline.remaining_seconds() == 20
 ```
 
-parent deadline을 전달하면 더 이른 expiry가 선택된다. parent와 child가 다른 clock
-객체를 사용하면 실패한다. timeout, expiry, advance에 boolean/NaN/Infinity/음수를
-허용하지 않는다.
+상위 작업에 deadline이 있으면 상위와 하위 deadline 중 더 빠른 시각을 사용한다.
+서로 다른 clock으로 만든 deadline을 섞으면 오류다.
 
-## Cancellation
+시간 값에는 boolean, `NaN`, `Infinity`, 음수를 넣을 수 없다.
 
-`CancellationSource`는 쓰기 권한, `CancellationToken`은 읽기 권한이다.
+## 실행 코드에 중단을 알리기
+
+`CancellationSource`는 중단 상태를 바꾸는 쪽에서 사용한다. handler처럼 중단 여부만
+확인하는 코드는 `CancellationToken`을 받는다.
 
 ```python
 source = CancellationSource()
@@ -187,16 +196,16 @@ source.cancel("deployment draining")
 token.raise_if_cancelled()
 ```
 
-특성:
+동작 규칙:
 
-- `cancel()`은 최초 호출만 `True`
-- 취소 이유는 최초 값을 유지
-- parent 취소는 child에 전파
-- child 취소는 parent/sibling에 역전파되지 않음
-- deadline 만료는 `"deadline exceeded"`
-- source/deadline은 같은 clock domain 사용
+- `cancel()`은 처음 상태를 바꾼 호출만 `True`를 반환한다.
+- 취소 이유는 처음 전달한 값을 유지한다.
+- 상위 token이 취소되면 하위 token도 취소된다.
+- 하위 token 취소는 상위 또는 다른 하위 token에 영향을 주지 않는다.
+- deadline이 지나면 이유는 `"deadline exceeded"`다.
+- source와 deadline은 같은 clock 객체를 사용해야 한다.
 
-## GracefulShutdown
+## 진행 중인 일을 정리하고 종료하기
 
 상태:
 
@@ -204,18 +213,20 @@ token.raise_if_cancelled()
 running → draining → stopped
 ```
 
-`begin(grace_seconds)`는 최초 호출에만 deadline을 만든다. draining 중 다시 호출해도
-grace window가 늘어나지 않는다.
+`begin(grace_seconds)`을 호출하면 새 작업을 받지 않는 `draining` 상태로 바뀐다.
+처음 호출할 때만 종료 deadline을 만든다. 반복 호출해도 기다리는 시간이 늘어나지
+않는다.
 
-`poll()`은 deadline이 만료되면 cancellation reason을 설정하고 stopped로 전환한다.
-`stop()`은 즉시 cancellation과 stopped 상태를 설정한다.
+`poll()`은 기다릴 수 있는 시간이 끝났는지 확인한다. 시간이 끝나면 실행 취소 이유를
+설정하고 `stopped`로 바꾼다. `stop()`은 기다리지 않고 즉시 중단한다.
 
-후속 worker는 SIGTERM을 `begin()`에 연결하고, poll 또는 event loop를 통해 grace
-deadline을 관찰해야 한다.
+후속 worker는 운영체제의 SIGTERM을 받으면 `begin()`을 호출해야 한다. event loop에서
+`poll()` 또는 같은 역할의 검사를 반복해 종료 deadline을 지켜야 한다.
 
-## LogContext
+## 검색하기 쉬운 공통 로그 정보
 
-`LogContext`는 immutable structured field 집합이다.
+`LogContext`는 모든 로그에 함께 넣을 key-value 정보를 담는다. 새 값을 묶으면 기존
+객체를 바꾸지 않고 새로운 context를 만든다.
 
 ```python
 base = LogContext({"service": "finite-worker"})
@@ -225,12 +236,12 @@ with execution.activate():
     record = execution.as_dict("handler.started", handler="resize")
 ```
 
-field 규칙:
+field가 지켜야 할 규칙:
 
-- key는 non-empty string
+- key는 비어 있지 않은 문자열
 - `event`는 예약 key
-- value는 exact JSON scalar
-- float는 finite
+- value는 JSON의 단일 값
+- float는 `NaN`이나 `Infinity`가 아닌 유한한 값
 
 병합 우선순위:
 
@@ -238,5 +249,5 @@ field 규칙:
 현재 활성 context < instance fields < as_dict 호출 fields < event
 ```
 
-`ContextVar`를 사용하므로 async task별 활성 context가 분리되고 context manager 종료
-후 이전 값으로 복원된다.
+내부에서 `ContextVar`를 사용한다. 여러 async task가 동시에 실행되어도 각 task의
+로그 정보가 섞이지 않는다. `with` 블록이 끝나면 이전 context로 돌아간다.
