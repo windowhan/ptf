@@ -4,8 +4,6 @@ from __future__ import annotations
 
 from datetime import timedelta
 
-import pytest
-
 from distributed_runtime.core.config import FinitePolicy
 from distributed_runtime.core.errors import (
     CancelledExecutionError,
@@ -37,14 +35,10 @@ def test_classify_retryable() -> None:
 
 
 def test_classify_permanent_and_contract_errors() -> None:
-    assert (
-        classify_error(PermanentExecutionError("bad"), 1, POLICY).outcome
-        == "permanent"
-    )
+    assert classify_error(PermanentExecutionError("bad"), 1, POLICY).outcome == "permanent"
     # contract violations are permanent — retrying runs the same wrong code
     assert (
-        classify_error(InvariantViolationError("x", details={}), 1, POLICY).outcome
-        == "permanent"
+        classify_error(InvariantViolationError("x", details={}), 1, POLICY).outcome == "permanent"
     )
 
 
@@ -56,10 +50,7 @@ def test_classify_rate_limited_respects_retry_after_floor() -> None:
 
 
 def test_classify_cancelled_and_unknown() -> None:
-    assert (
-        classify_error(CancelledExecutionError("stop"), 1, POLICY).outcome
-        == "cancelled"
-    )
+    assert classify_error(CancelledExecutionError("stop"), 1, POLICY).outcome == "cancelled"
     unknown = classify_error(RuntimeError("boom"), 1, POLICY)
     assert unknown.outcome == "retryable"  # transient-safe default
 

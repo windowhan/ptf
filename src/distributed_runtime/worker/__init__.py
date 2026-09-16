@@ -1,5 +1,6 @@
 """Runtime worker coordination surfaces."""
 
+from distributed_runtime.worker.continuous import ContinuousSupervisor
 from distributed_runtime.worker.finite import FiniteWorker, HandledUnit
 from distributed_runtime.worker.retry import (
     AttemptOutcome,
@@ -10,6 +11,7 @@ from distributed_runtime.worker.retry import (
 
 __all__ = [
     "AttemptOutcome",
+    "ContinuousSupervisor",
     "FiniteWorker",
     "HandledUnit",
     "backoff_delay",
