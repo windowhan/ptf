@@ -31,6 +31,7 @@
 
 다음 항목은 아직 구현되지 않았다.
 
+- 제품 개발자가 GCP 없이 코드를 검사하는 로컬 테스트 도구
 - Cloud SQL에 상태를 저장하고 읽는 코드와 DB 변경 파일
 - Pub/Sub으로 메시지를 보내고 받는 코드
 - Finite/Continuous 작업을 실제로 실행하는 worker
@@ -57,6 +58,7 @@
 3. [Configuration](reference/configuration.md)
 4. [확장 경계](development/extension-boundaries.md)
 5. [테스트와 품질 게이트](development/testing-and-quality.md)
+6. 구현할 기능의 [설계 문서](#설계)
 
 ### 설계와 로드맵 검토자
 
@@ -98,6 +100,14 @@
 | [테스트와 품질 게이트](development/testing-and-quality.md) | 로컬/CI 검증 명령과 테스트 분류 |
 | [확장 경계](development/extension-boundaries.md) | GCP/worker/control 구현 시 지켜야 할 경계 |
 | [호환성과 버전 정책](development/compatibility-and-versioning.md) | snapshot, SemVer, schema evolution |
+
+### 설계
+
+아직 구현되지 않은 기능의 계약을 구현 전에 정리한 문서다.
+
+| 문서 | 목적 |
+|---|---|
+| [로컬 테스트 킷 설계](design/local-testing-kits.md) | `testing` package의 구성 요소와 사용 방법 계약 |
 
 ## 문서의 기준
 
