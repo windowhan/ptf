@@ -28,10 +28,10 @@
 - workload와 sink를 등록하고 찾는 registry
 - 마감 시각, 작업 중단, 안전한 종료, 구조화 로그
 - 공개 API와 메시지 형식의 실수 변경을 잡는 기준 파일
+- GCP 없이 Finite/Continuous 코드를 검사하는 로컬 테스트 도구 (`testing` package)
 
 다음 항목은 아직 구현되지 않았다.
 
-- 제품 개발자가 GCP 없이 코드를 검사하는 로컬 테스트 도구
 - Cloud SQL에 상태를 저장하고 읽는 코드와 DB 변경 파일
 - Pub/Sub으로 메시지를 보내고 받는 코드
 - Finite/Continuous 작업을 실제로 실행하는 worker
@@ -109,6 +109,7 @@
 |---|---|
 | [로컬 테스트 킷 설계](design/local-testing-kits.md) | `testing` package의 구성 요소와 사용 방법 계약 |
 | [제품 예제 설계](design/product-examples.md) | `examples/`의 workload 구성과 결과 종합 경계 |
+| [상태 스키마 설계](design/state-schema.md) | PostgreSQL 테이블·불변식·트랜잭션 경계 계약 |
 
 ## 문서의 기준
 
@@ -127,4 +128,4 @@
 - package version: `0.1.0`
 - Python: `>=3.12`
 - 실행에 필요한 외부 Python package: 없음
-- 로컬 검증 결과: 164개 테스트, branch coverage 95%
+- 로컬 검증 결과: 188개 테스트, branch coverage 94%
