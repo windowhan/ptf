@@ -14,6 +14,7 @@ EXPECTED_SUBPACKAGES = {
     "continuous",
     "control",
     "core",
+    "deploy",
     "finite",
     "gcp",
     "state",
