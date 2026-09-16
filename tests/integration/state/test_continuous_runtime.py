@@ -15,7 +15,6 @@ from distributed_runtime.continuous import (
     SinkGuarantee,
 )
 from distributed_runtime.control.admin import ContinuousAdmin
-from distributed_runtime.registry import ContinuousRegistration
 from distributed_runtime.control.reconciler import Reconciler
 from distributed_runtime.core import (
     InvariantViolationError,
@@ -26,6 +25,7 @@ from distributed_runtime.core import (
     VersionedEnvelope,
     WorkloadMode,
 )
+from distributed_runtime.registry import ContinuousRegistration
 from distributed_runtime.state import StateEngine, migrate
 from distributed_runtime.state.outbox import OutboxStore
 from distributed_runtime.state.workers import WorkerRegistry
