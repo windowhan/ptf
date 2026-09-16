@@ -216,3 +216,5 @@ worker가 이런 사건을 cancellation과 deadline으로 바꿔 전달하고, h
 - 성공 상태를 DB에 저장한 다음에만 queue 메시지에 ack한다.
 - 다시 계획할 때 이전 planning record와 비교한다.
 - 시간 초과, 종료 신호, 사용자 취소를 `CancellationToken` 하나로 전달한다.
+- unit 결과를 run ID로 조회하는 client API를 제공한다. 결과를 모아 의미
+  있는 값으로 만드는 종합은 제품 코드가 수행한다(ADR-007).

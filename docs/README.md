@@ -108,6 +108,7 @@
 | 문서 | 목적 |
 |---|---|
 | [로컬 테스트 킷 설계](design/local-testing-kits.md) | `testing` package의 구성 요소와 사용 방법 계약 |
+| [제품 예제 설계](design/product-examples.md) | `examples/`의 workload 구성과 결과 종합 경계 |
 
 ## 문서의 기준
 
