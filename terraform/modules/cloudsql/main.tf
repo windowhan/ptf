@@ -23,6 +23,10 @@ variable "pitr_enabled" {
   type    = bool
   default = true
 }
+variable "deletion_protection" {
+  type    = bool
+  default = true
+}
 
 resource "google_sql_database_instance" "state" {
   project          = var.project
@@ -32,6 +36,7 @@ resource "google_sql_database_instance" "state" {
 
   settings {
     tier              = var.tier
+    edition           = "ENTERPRISE"
     availability_type = var.ha ? "REGIONAL" : "ZONAL"
 
     ip_configuration {
@@ -46,7 +51,7 @@ resource "google_sql_database_instance" "state" {
     }
   }
 
-  deletion_protection = true
+  deletion_protection = var.deletion_protection
 }
 
 resource "google_sql_database" "runtime" {

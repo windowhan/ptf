@@ -5,6 +5,8 @@ variable "project" {
 variable "services" {
   type = list(string)
   default = [
+    "cloudresourcemanager.googleapis.com",
+    "servicenetworking.googleapis.com",
     "sqladmin.googleapis.com",
     "pubsub.googleapis.com",
     "compute.googleapis.com",

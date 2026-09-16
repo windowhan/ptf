@@ -18,15 +18,19 @@ resource "google_monitoring_alert_policy" "dead_letters" {
 
   conditions {
     display_name = "dead-letter queue depth"
-    condition_monitoring_query_language {
-      query    = <<-EOT
-        fetch pubsub_topic
-        | metric 'pubsub.googleapis.com/topic/send_message_operation_count'
-        | filter resource.topic_id == '${var.name}-dead-letter'
-        | group_by 5m, [value_count_aggregate: aggregate(value.count)]
-        | condition val() > 0
-      EOT
-      duration = "60s"
+    condition_threshold {
+      filter = join(" AND ", [
+        "resource.type = \"pubsub_topic\"",
+        "resource.labels.topic_id = \"${var.name}-dead-letter\"",
+        "metric.type = \"pubsub.googleapis.com/topic/send_message_operation_count\"",
+      ])
+      duration        = "60s"
+      comparison      = "COMPARISON_GT"
+      threshold_value = 0
+      aggregations {
+        alignment_period   = "300s"
+        per_series_aligner = "ALIGN_SUM"
+      }
     }
   }
 
@@ -43,7 +47,10 @@ resource "google_monitoring_alert_policy" "no_workers" {
     display_name = "worker heartbeat absence"
     condition_absent {
       duration = "300s"
-      filter   = "resource.type = \"gce_instance\""
+      filter = join(" AND ", [
+        "resource.type = \"gce_instance\"",
+        "metric.type = \"compute.googleapis.com/instance/cpu/utilization\"",
+      ])
     }
   }
 

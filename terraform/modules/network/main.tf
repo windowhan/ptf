@@ -40,6 +40,11 @@ resource "google_service_networking_connection" "private" {
   reserved_peering_ranges = [google_compute_global_address.private_services.name]
 }
 
-output "network_id" { value = google_compute_network.this.id }
+output "network_id" {
+  value = google_compute_network.this.id
+  # Consumers that place resources on private IPs (e.g. Cloud SQL) must not
+  # observe the network before private services access is established.
+  depends_on = [google_service_networking_connection.private]
+}
 output "subnet_id" { value = google_compute_subnetwork.workers.id }
 output "network_name" { value = google_compute_network.this.name }

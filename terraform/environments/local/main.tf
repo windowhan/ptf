@@ -38,24 +38,27 @@ module "apis" {
 }
 
 module "network" {
-  source  = "../../modules/network"
-  project = var.project
-  region  = var.region
+  source     = "../../modules/network"
+  project    = var.project
+  region     = var.region
+  depends_on = [module.apis]
 }
 
 module "iam" {
-  source  = "../../modules/iam"
-  project = var.project
+  source     = "../../modules/iam"
+  project    = var.project
+  depends_on = [module.apis]
 }
 
 module "cloudsql" {
-  source     = "../../modules/cloudsql"
-  project    = var.project
-  region     = var.region
-  network_id = module.network.network_id
-  tier       = "db-f1-micro"
-  ha         = false
-  depends_on = [module.apis]
+  source              = "../../modules/cloudsql"
+  project             = var.project
+  region              = var.region
+  network_id          = module.network.network_id
+  tier                = "db-f1-micro"
+  ha                  = false
+  deletion_protection = false
+  depends_on          = [module.apis]
 }
 
 module "pubsub" {
