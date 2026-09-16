@@ -16,10 +16,11 @@ EXPECTED_SUBPACKAGES = {
     "core",
     "finite",
     "gcp",
+    "state",
     "testing",
     "worker",
 }
-EXPECTED_EXTRAS = {"gcp", "testing"}
+EXPECTED_EXTRAS = {"gcp", "postgres", "testing"}
 
 
 def test_distribution_metadata_matches_runtime_version() -> None:

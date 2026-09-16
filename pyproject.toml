@@ -22,9 +22,14 @@ dependencies = []
 [project.optional-dependencies]
 gcp = []
 testing = []
+postgres = [
+    "asyncpg>=0.30,<1",
+]
 
 [dependency-groups]
 dev = [
+  "asyncpg>=0.30,<1",
+  "asyncpg-stubs>=0.30,<1",
   "build>=1.2.2,<2",
   "coverage>=7.6,<8",
   "mypy>=1.15,<2",
