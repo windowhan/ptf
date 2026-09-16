@@ -55,13 +55,14 @@ def test_expected_subpackages_are_installable() -> None:
 
 def test_base_import_does_not_load_google_clients() -> None:
     """Importing the public root must stay free of optional cloud clients."""
-    loaded_google_modules = {
-        module_name
-        for module_name in sys.modules
-        if module_name == "google" or module_name.startswith("google.")
-    }
+    import subprocess
 
-    assert loaded_google_modules == set()
+    code = (
+        "import sys; import distributed_runtime; "
+        "assert not any(m == 'google' or m.startswith('google.') for m in sys.modules); "
+        "assert not any(m == 'asyncpg' or m.startswith('asyncpg.') for m in sys.modules)"
+    )
+    subprocess.run([sys.executable, "-c", code], check=True)
 
 
 def test_typed_marker_is_packaged() -> None:

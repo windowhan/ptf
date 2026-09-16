@@ -351,6 +351,72 @@ class FiniteStateStore:
             )
         return tuple(claimed)
 
+    async def claim_unit(
+        self,
+        owner: RuntimeInstanceId,
+        run_id: RunId,
+        unit_key: str,
+        *,
+        claim_grace_seconds: int = 120,
+    ) -> ClaimedUnit | None:
+        """Claim one specific due unit — the Pub/Sub wakeup path.
+
+        Returns None when the unit is already claimed, done, or not yet due.
+        """
+        async with self._engine.acquire() as connection, connection.transaction():
+            row = await connection.fetchrow(
+                """
+                    WITH due AS (
+                        SELECT u.run_id, u.unit_key,
+                               (p.unit->>'timeout_seconds')::int
+                                   AS timeout_seconds
+                        FROM runtime_state.finite_units u
+                        JOIN runtime_state.finite_plan_units p
+                          ON p.run_id = u.run_id
+                         AND p.unit_key = u.unit_key
+                         AND p.planning_generation = (
+                            SELECT max(planning_generation)
+                            FROM runtime_state.finite_plan_units g
+                            WHERE g.run_id = u.run_id
+                              AND g.unit_key = u.unit_key)
+                        WHERE u.run_id = $2 AND u.unit_key = $3
+                          AND u.status IN ('ready', 'retry_scheduled')
+                          AND (u.next_attempt_at IS NULL
+                               OR u.next_attempt_at <= now())
+                          AND (u.claim_expires_at IS NULL
+                               OR u.claim_expires_at < now())
+                        FOR UPDATE OF u
+                    )
+                    UPDATE runtime_state.finite_units u
+                    SET status = 'running',
+                        claimed_by = $1,
+                        claim_token = u.claim_token + 1,
+                        claim_expires_at = now() + make_interval(
+                            secs => due.timeout_seconds + $4),
+                        attempt_count = u.attempt_count + 1,
+                        next_attempt_at = NULL,
+                        updated_at = now()
+                    FROM due
+                    WHERE u.run_id = due.run_id AND u.unit_key = due.unit_key
+                    RETURNING u.attempt_count, u.claim_token, u.claim_expires_at
+                    """,
+                str(owner),
+                str(run_id),
+                unit_key,
+                claim_grace_seconds,
+            )
+        if row is None:
+            return None
+        unit = await self._load_unit(run_id, unit_key)
+        return ClaimedUnit(
+            run_id=run_id,
+            unit_key=unit_key,
+            unit=unit,
+            attempt=int(row["attempt_count"]),
+            claim_token=int(row["claim_token"]),
+            claim_expires_at=row["claim_expires_at"],
+        )
+
     async def _load_unit(self, run_id: RunId, unit_key: str) -> ExecutionUnit:
         async with self._engine.acquire() as connection:
             row = await connection.fetchrow(
@@ -436,6 +502,25 @@ class FiniteStateStore:
                         "claim_token": claimed.claim_token,
                     },
                 )
+
+    async def dead_letter(self, claimed: ClaimedUnit) -> None:
+        """Move a unit to dead_lettered, fenced by the caller's claim token."""
+        async with self._engine.acquire() as connection:
+            changed = await connection.execute(
+                """
+                UPDATE runtime_state.finite_units
+                SET status = 'dead_lettered', updated_at = now()
+                WHERE run_id = $1 AND unit_key = $2 AND claim_token = $3
+                """,
+                str(claimed.run_id),
+                claimed.unit_key,
+                claimed.claim_token,
+            )
+        if changed == "UPDATE 0":
+            raise InvariantViolationError(
+                "stale claim token: cannot dead-letter",
+                details={"run_id": str(claimed.run_id), "unit_key": claimed.unit_key},
+            )
 
     async def unit_states(self, run_id: RunId) -> tuple[UnitState, ...]:
         async with self._engine.acquire() as connection:
