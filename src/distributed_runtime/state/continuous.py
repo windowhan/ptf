@@ -283,6 +283,29 @@ class ContinuousStateStore:
             )
         return changed == "UPDATE 1"
 
+    async def release_partition(
+        self,
+        deployment_id: DeploymentId,
+        partition_id: PartitionId,
+        *,
+        expected_fencing_token: int,
+    ) -> bool:
+        """Return a partition to unassigned, fenced by its current token."""
+        async with self._engine.acquire() as connection:
+            changed = await connection.execute(
+                """
+                UPDATE runtime_state.continuous_partitions
+                SET owner_id = NULL, lease_expires_at = NULL,
+                    status = 'unassigned', updated_at = now()
+                WHERE deployment_id = $1 AND partition_id = $2
+                  AND fencing_token = $3
+                """,
+                str(deployment_id),
+                str(partition_id),
+                expected_fencing_token,
+            )
+        return changed == "UPDATE 1"
+
     async def set_partition_status(
         self,
         lease: LeaseHandle,
