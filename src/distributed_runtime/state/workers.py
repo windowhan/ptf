@@ -72,13 +72,20 @@ class WorkerRegistry:
         *,
         revision: RevisionId | None = None,
     ) -> bool:
-        """Refresh liveness; returns False for unknown instances."""
+        """Refresh liveness; returns False for unknown instances.
+
+        A worker resumed after a transient stall revives from ``dead`` —
+        only an explicit ``draining`` mark survives heartbeats. Fencing
+        tokens, not worker status, protect moved partitions.
+        """
         async with self._engine.acquire() as connection:
             if revision is None:
                 changed = await connection.execute(
                     """
                     UPDATE runtime_state.worker_instances
-                    SET last_heartbeat_at = now()
+                    SET last_heartbeat_at = now(),
+                        status = CASE WHEN status = 'draining'
+                                      THEN 'draining' ELSE 'active' END
                     WHERE instance_id = $1
                     """,
                     str(instance_id),
@@ -87,7 +94,9 @@ class WorkerRegistry:
                 changed = await connection.execute(
                     """
                     UPDATE runtime_state.worker_instances
-                    SET last_heartbeat_at = now(), revision = $2
+                    SET last_heartbeat_at = now(), revision = $2,
+                        status = CASE WHEN status = 'draining'
+                                      THEN 'draining' ELSE 'active' END
                     WHERE instance_id = $1
                     """,
                     str(instance_id),

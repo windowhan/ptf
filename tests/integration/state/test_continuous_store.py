@@ -261,6 +261,15 @@ def test_worker_heartbeat_and_stale_detection(clean_state: str) -> None:
             assert dead == 1
             assert (await workers.list_active()) == ()
             assert (await workers.get(worker.instance_id)).status == "dead"  # type: ignore[union-attr]
+
+            # a resumed heartbeat revives a transiently-dead worker
+            assert await workers.heartbeat(worker.instance_id)
+            assert (await workers.get(worker.instance_id)).status == "active"  # type: ignore[union-attr]
+
+            # but an explicit drain survives heartbeats
+            await workers.mark_status(worker.instance_id, "draining")
+            assert await workers.heartbeat(worker.instance_id)
+            assert (await workers.get(worker.instance_id)).status == "draining"  # type: ignore[union-attr]
         finally:
             await engine.close()
 
