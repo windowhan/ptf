@@ -1,11 +1,10 @@
 # 제품 예제 설계
 
-> 이 문서는 아직 구현되지 않은 `examples/` 디렉터리의 설계 계약이다.
-> 구현은 [구현 세부 계획](../implementation-plan.md)의 #48~49이며, 실제 GCP
-> 배포 검증은 #50 이후다.
-> 이 문서의 코드 예시는 목표 형태이며 구현 시 달라질 수 있다.
+> `examples/finite_example`(구간 합)과 `examples/continuous_example`
+> (shard pulse)의 설계 계약이다. 두 예제 모두 로컬 테스트 킷으로
+> 검증됐으며, 실제 GCP 배포 검증은 #50 이후 E2E 구간에서 진행한다.
 >
-> **문서 상태:** 설계 초안
+> **문서 상태:** 구현 반영됨
 
 ## 목적
 
@@ -119,15 +118,23 @@ COPY runtime.yaml /app/runtime.yaml
 2. **GCP:** wheel로 빌드해 runtime image에 넣고 배포한 뒤 client로
    submit → wait → results → 합산. #50 이후 E2E의 검증 대상.
 
-## Continuous 예제
+## Continuous 예제: shard pulse
 
-`implementation-plan.md` #49, Gate `CT-EX-CON`에 해당한다. 소재는 아직
-정하지 않았다. 정할 때 만족해야 할 조건:
+`implementation-plan.md` #49, Gate `CT-EX-CON`에 해당한다. 구현된
+소재는 `shard.pulse`다 — 고정 샤드 집합을 discovery하고 각 파티션이
+fenced `pulses` sink로 유한한 pulse 이벤트를 발행한다.
 
-- partition으로 나눌 수 있는 대상일 것
-- 외부 서비스 없이 로컬 킷으로 동작을 보일 수 있을 것
-- `PartitionContext.emit()`으로 결과를 보내는 흐름을 보여줄 것
-- 제품 특화 이름을 쓰지 않을 것
+| 항목 | 값 |
+|---|---|
+| workload 이름 | `shard.pulse` |
+| execution class | `stateful-stream` |
+| partition | `shard:{i}` (4개) |
+| emission | deterministic `stable_id` `{partition}:{tick}` — at-least-once 재전달이 dedup된다 |
+
+선택 조건을 모두 만족한다: partition으로 나눌 수 있고, 외부 서비스
+없이 로컬 킷으로 동작하며, `PartitionContext.emit()` 경로를 보여주고,
+제품 특화 이름을 쓰지 않는다. cancellation(lease 상실, drain) 시
+즉시 발행을 멈추는 것도 예제 테스트가 검증한다.
 
 ## 완료 기준
 

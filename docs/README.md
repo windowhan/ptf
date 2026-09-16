@@ -30,15 +30,20 @@
 - 공개 API와 메시지 형식의 실수 변경을 잡는 기준 파일
 - GCP 없이 Finite/Continuous 코드를 검사하는 로컬 테스트 도구 (`testing` package)
 
-다음 항목은 아직 구현되지 않았다.
-
 - Cloud SQL에 상태를 저장하고 읽는 코드와 DB 변경 파일
-- Pub/Sub으로 메시지를 보내고 받는 코드
+- Pub/Sub으로 메시지를 보내고 받는 코드 (emulator 검증)
 - Finite/Continuous 작업을 실제로 실행하는 worker
 - DB 변경과 메시지 발행을 함께 안전하게 처리하는 outbox
 - 실패한 작업의 다음 실행 시각을 관리하는 retry dispatcher
 - Continuous partition 소유권을 실제 DB에서 관리하는 조정 작업
-- GCP client 연결, Terraform, 실제 GCP 전체 경로 검증
+- Finite 구간 합과 Continuous shard pulse 예제 (`examples/`)
+- Terraform GCP 인프라 모듈 (`terraform/`, docker로 fmt/validate 검증)
+
+다음 항목은 아직 검증되지 않았다.
+
+- 실제 GCP credential을 사용한 배포와 전체 경로 검증 — Terraform
+  모듈은 validate까지 확인됐으며, 실제 provisioning과 E2E는
+  credential이 있는 환경에서 진행한다.
 
 ## 권장 읽기 순서
 
@@ -103,7 +108,7 @@
 
 ### 설계
 
-아직 구현되지 않은 기능의 계약을 구현 전에 정리한 문서다.
+기능의 계약을 구현과 함께(또는 구현 전에) 정리한 문서다.
 
 | 문서 | 목적 |
 |---|---|

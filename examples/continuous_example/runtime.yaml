@@ -1,0 +1,11 @@
+# Deployment manifest consumed by the runtime worker image.
+# Mirrors the registrations in example_stream/app.py.
+application: example-stream
+workloads:
+  - name: shard.pulse
+    version: 1.0.0
+    mode: continuous
+    execution_class: stateful-stream
+sinks:
+  - name: pulses
+    guarantee: runtime_fenced

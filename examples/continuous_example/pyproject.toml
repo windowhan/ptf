@@ -1,0 +1,15 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "example-stream"
+version = "1.0.0"
+description = "Continuous shard-pulse workload example for distributed-runtime"
+requires-python = ">=3.12"
+dependencies = [
+  "distributed-runtime",
+]
+
+[tool.hatch.build.targets.wheel]
+packages = ["example_stream"]
