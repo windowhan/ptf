@@ -20,7 +20,9 @@ classifiers = [
 dependencies = []
 
 [project.optional-dependencies]
-gcp = []
+gcp = [
+    "google-cloud-pubsub>=2.27,<3",
+]
 testing = []
 postgres = [
     "asyncpg>=0.30,<1",
@@ -32,6 +34,7 @@ dev = [
   "asyncpg-stubs>=0.30,<1",
   "build>=1.2.2,<2",
   "coverage>=7.6,<8",
+  "google-cloud-pubsub>=2.27,<3",
   "mypy>=1.15,<2",
   "pytest>=8.3,<10",
   "ruff>=0.9,<1",
@@ -94,3 +97,7 @@ select = [
 
 [tool.ruff.lint.isort]
 known-first-party = ["distributed_runtime"]
+
+[[tool.mypy.overrides]]
+module = ["google.cloud.*", "google.api_core.*", "google.protobuf.*", "grpc.*"]
+ignore_missing_imports = true
