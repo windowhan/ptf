@@ -1,0 +1,9 @@
+# E2E driver image — the runtime image plus the driver script. Runs as
+# the dedicated ``runtime-control-e2e-driver`` Cloud Run Job so it shares
+# the control plane's env contract and VPC placement.
+ARG BASE=runtime-e2e:local
+FROM ${BASE}
+ENV PYTHONUNBUFFERED=1
+COPY gcp_driver.py /app/gcp_driver.py
+ENTRYPOINT ["python"]
+CMD ["/app/gcp_driver.py"]
