@@ -1,0 +1,46 @@
+variable "project" {
+  type = string
+}
+variable "name" {
+  type    = string
+  default = "runtime"
+}
+# Revision filter: workers subscribe only to messages for their pool revision
+variable "pool_revisions" {
+  type    = list(string)
+  default = ["local"]
+}
+
+resource "google_pubsub_topic" "unit_dispatch" {
+  project = var.project
+  name    = "${var.name}-unit-dispatch"
+}
+
+resource "google_pubsub_topic" "dead_letter" {
+  project = var.project
+  name    = "${var.name}-dead-letter"
+}
+
+resource "google_pubsub_subscription" "workers" {
+  for_each = toset(var.pool_revisions)
+  project  = var.project
+  name     = "${var.name}-units-${each.value}"
+  topic    = google_pubsub_topic.unit_dispatch.id
+
+  # each pool revision pulls only its own generation's messages
+  filter = "attributes.runtime_pool_revision=\"${each.value}\""
+
+  ack_deadline_seconds       = 30
+  message_retention_duration = "600s"
+
+  dead_letter_policy {
+    dead_letter_topic     = google_pubsub_topic.dead_letter.id
+    max_delivery_attempts = 10
+  }
+
+  expiration_policy { ttl = "" }
+}
+
+output "dispatch_topic" { value = google_pubsub_topic.unit_dispatch.name }
+output "dead_letter_topic" { value = google_pubsub_topic.dead_letter.name }
+output "worker_subscriptions" { value = { for k, s in google_pubsub_subscription.workers : k => s.name } }

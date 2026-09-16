@@ -34,3 +34,8 @@ venv/
 .DS_Store
 .idea/
 .vscode/
+
+# Terraform
+.terraform/
+*.tfstate*
+.terraform.lock.hcl
