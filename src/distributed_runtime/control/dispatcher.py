@@ -35,11 +35,13 @@ class OutboxDispatcher:
         *,
         application: str,
         runtime_pool_revision: str,
+        dispatch_topic: str,
     ) -> None:
         self._engine = engine
         self._outbox = OutboxStore(engine)
         self._application = application
         self._pool_revision = runtime_pool_revision
+        self._dispatch_topic = dispatch_topic
 
     async def cycle(self, sender: Sender, *, limit: int = 100) -> DispatchCycle:
         """One dispatch pass: enqueue due retries, publish pending rows."""
@@ -91,7 +93,7 @@ class OutboxDispatcher:
                     connection,
                     kind="unit_dispatch",
                     dedup_key=(f"{row['run_id']}:{row['unit_key']}:retry:{row['attempt_count']}"),
-                    destination="runtime-units",
+                    destination=self._dispatch_topic,
                     envelope=envelope,
                 )
         return len(rows)

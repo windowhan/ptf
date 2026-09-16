@@ -77,6 +77,7 @@ class PubSubTransport:
             message_kind=envelope.message_kind,
             workload=envelope.workload,
             idempotency_key=envelope.idempotency_key,
+            runtime_pool_revision=envelope.runtime_pool_revision,
         )
         return str(future.result(timeout=30))
 

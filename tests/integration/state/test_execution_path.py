@@ -325,7 +325,10 @@ def test_dispatcher_enqueues_due_retries(clean_state: str) -> None:
                     str(submitted.run_id),
                 )
             dispatcher = OutboxDispatcher(
-                engine, application="example-product", runtime_pool_revision="local"
+                engine,
+                application="example-product",
+                runtime_pool_revision="local",
+                dispatch_topic="runtime-unit-dispatch",
             )
             sent: list[str] = []
 
