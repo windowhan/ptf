@@ -38,10 +38,11 @@ variable "min_instance_count" {
 }
 
 resource "google_cloud_run_v2_service" "control" {
-  project  = var.project
-  name     = var.name
-  location = var.region
-  ingress  = "INGRESS_TRAFFIC_INTERNAL_ONLY"
+  project             = var.project
+  name                = var.name
+  location            = var.region
+  ingress             = "INGRESS_TRAFFIC_INTERNAL_ONLY"
+  deletion_protection = false
 
   template {
     service_account = var.service_account
@@ -73,10 +74,11 @@ resource "google_cloud_run_v2_service" "control" {
 # Schema migrations run inside the VPC as a one-shot job — the database is
 # private-only, so applying them cannot be done from outside the network.
 resource "google_cloud_run_v2_job" "migrate" {
-  count    = var.migrate_job ? 1 : 0
-  project  = var.project
-  name     = "${var.name}-migrate"
-  location = var.region
+  count               = var.migrate_job ? 1 : 0
+  project             = var.project
+  name                = "${var.name}-migrate"
+  location            = var.region
+  deletion_protection = false
 
   template {
     template {
@@ -116,10 +118,11 @@ variable "driver_image" {
 }
 
 resource "google_cloud_run_v2_job" "driver" {
-  count    = var.driver_image != "" ? 1 : 0
-  project  = var.project
-  name     = "${var.name}-e2e-driver"
-  location = var.region
+  count               = var.driver_image != "" ? 1 : 0
+  project             = var.project
+  name                = "${var.name}-e2e-driver"
+  location            = var.region
+  deletion_protection = false
 
   template {
     task_count = 1
