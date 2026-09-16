@@ -137,6 +137,29 @@ class ContinuousStateStore:
             )
         return None if row is None else _deployment_from_row(row)
 
+    async def list_deployments(
+        self, statuses: Sequence[DeploymentStatus] | None = None
+    ) -> tuple[StoredDeployment, ...]:
+        """Deployments in the given statuses (all statuses when omitted)."""
+        async with self._engine.acquire() as connection:
+            if statuses is None:
+                rows = await connection.fetch(
+                    """
+                    SELECT * FROM runtime_state.continuous_deployments
+                    ORDER BY deployment_id
+                    """
+                )
+            else:
+                rows = await connection.fetch(
+                    """
+                    SELECT * FROM runtime_state.continuous_deployments
+                    WHERE status = ANY($1::text[])
+                    ORDER BY deployment_id
+                    """,
+                    [status.value for status in statuses],
+                )
+        return tuple(_deployment_from_row(row) for row in rows)
+
     async def sync_partitions(
         self,
         deployment_id: DeploymentId,

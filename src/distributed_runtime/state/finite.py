@@ -184,6 +184,20 @@ class FiniteStateStore:
             )
         return None if row is None else _run_from_row(row)
 
+    async def list_pending_runs(self, *, limit: int = 100) -> tuple[StoredRun, ...]:
+        """Runs awaiting planning, in submission order (control-loop feed)."""
+        async with self._engine.acquire() as connection:
+            rows = await connection.fetch(
+                """
+                SELECT * FROM runtime_state.finite_runs
+                WHERE status IN ('pending', 'planning')
+                ORDER BY created_at, run_id
+                LIMIT $1
+                """,
+                limit,
+            )
+        return tuple(_run_from_row(row) for row in rows)
+
     async def transition_run(self, run_id: RunId, status: RunStatus) -> None:
         """Apply a forward-only run status transition."""
         async with self._engine.acquire() as connection:

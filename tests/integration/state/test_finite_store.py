@@ -104,6 +104,34 @@ def test_submit_is_idempotent_and_plan_persists(clean_state: str) -> None:
 
 
 @requires_postgres
+def test_list_pending_runs_feeds_the_planner(clean_state: str) -> None:
+    async def exercise() -> None:
+        engine, store = await _store(clean_state)
+        try:
+            assert await store.list_pending_runs() == ()
+            for index in range(2):
+                await store.submit_run(
+                    run_id=RunId(f"run:pending-{index}"),
+                    workload_id=WorkloadId("workload:t"),
+                    workload_name="t",
+                    workload_version="1.0.0",
+                    planner_revision=RevisionId("rev:1"),
+                    execution_revision=RevisionId("rev:1"),
+                    input={},
+                )
+            pending = await store.list_pending_runs()
+            assert [run.status for run in pending] == [RunStatus.PENDING] * 2
+            # a planned (running) run drops out of the pending feed
+            await store.record_plan(pending[0].run_id, _units(1))
+            remaining = await store.list_pending_runs()
+            assert [run.run_id for run in remaining] == [pending[1].run_id]
+        finally:
+            await engine.close()
+
+    asyncio.run(exercise())
+
+
+@requires_postgres
 def test_claim_grants_exclusive_ownership(clean_state: str) -> None:
     async def exercise() -> None:
         engine, store, run_id = await _seed(clean_state)

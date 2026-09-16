@@ -265,3 +265,29 @@ def test_worker_heartbeat_and_stale_detection(clean_state: str) -> None:
             await engine.close()
 
     asyncio.run(exercise())
+
+
+@requires_postgres
+def test_list_deployments_filters_by_status(clean_state: str) -> None:
+    async def exercise() -> None:
+        engine, store = await _store(clean_state)
+        try:
+            from distributed_runtime.core import DeploymentStatus
+
+            other = DeploymentId("deployment:test-2")
+            await store.create_deployment(
+                deployment_id=other,
+                workload_id=WorkloadId("workload:c"),
+                workload_version="1.0.0",
+            )
+            everything = await store.list_deployments()
+            assert {d.deployment_id for d in everything} == {DEPLOY, other}
+            await store.transition_deployment(DEPLOY, DeploymentStatus.ACTIVE)
+            active = await store.list_deployments([DeploymentStatus.ACTIVE])
+            assert [d.deployment_id for d in active] == [DEPLOY]
+            pending = await store.list_deployments([DeploymentStatus.PENDING])
+            assert [d.deployment_id for d in pending] == [other]
+        finally:
+            await engine.close()
+
+    asyncio.run(exercise())
