@@ -44,6 +44,19 @@ resource "google_project_iam_member" "control_pubsub" {
   member  = "serviceAccount:${google_service_account.control.email}"
 }
 
+# Startup-script and process logs must reach Cloud Logging
+resource "google_project_iam_member" "worker_logging" {
+  project = var.project
+  role    = "roles/logging.logWriter"
+  member  = "serviceAccount:${google_service_account.worker.email}"
+}
+
+resource "google_project_iam_member" "control_logging" {
+  project = var.project
+  role    = "roles/logging.logWriter"
+  member  = "serviceAccount:${google_service_account.control.email}"
+}
+
 # DB password lives in Secret Manager; only the runtime identities read it
 resource "google_secret_manager_secret" "db_password" {
   project   = var.project

@@ -21,6 +21,21 @@ resource "google_pubsub_topic" "dead_letter" {
   name    = "${var.name}-dead-letter"
 }
 
+# Continuous emissions/checkpoints land here for downstream consumers
+resource "google_pubsub_topic" "events" {
+  project = var.project
+  name    = "${var.name}-events"
+}
+
+# Pull-everything subscription for verification and debugging
+resource "google_pubsub_subscription" "events_all" {
+  project = var.project
+  name    = "${var.name}-events-all"
+  topic   = google_pubsub_topic.events.id
+
+  expiration_policy { ttl = "" }
+}
+
 resource "google_pubsub_subscription" "workers" {
   for_each = toset(var.pool_revisions)
   project  = var.project
@@ -43,4 +58,6 @@ resource "google_pubsub_subscription" "workers" {
 
 output "dispatch_topic" { value = google_pubsub_topic.unit_dispatch.name }
 output "dead_letter_topic" { value = google_pubsub_topic.dead_letter.name }
+output "events_topic" { value = google_pubsub_topic.events.name }
+output "events_subscription" { value = google_pubsub_subscription.events_all.name }
 output "worker_subscriptions" { value = { for k, s in google_pubsub_subscription.workers : k => s.name } }

@@ -27,6 +27,14 @@ variable "deletion_protection" {
   type    = bool
   default = true
 }
+variable "db_user" {
+  type    = string
+  default = "runtime"
+}
+# google_secret_manager_secret.id that receives the generated password
+variable "password_secret_id" {
+  type = string
+}
 
 resource "google_sql_database_instance" "state" {
   project          = var.project
@@ -60,8 +68,26 @@ resource "google_sql_database" "runtime" {
   name     = "runtime"
 }
 
+resource "random_password" "db" {
+  length  = 32
+  special = false
+}
+
+resource "google_sql_user" "runtime" {
+  project  = var.project
+  instance = google_sql_database_instance.state.name
+  name     = var.db_user
+  password = random_password.db.result
+}
+
+resource "google_secret_manager_secret_version" "db_password" {
+  secret      = var.password_secret_id
+  secret_data = random_password.db.result
+}
+
 output "instance_connection_name" {
   value = google_sql_database_instance.state.connection_name
 }
 output "database" { value = google_sql_database.runtime.name }
 output "private_ip" { value = google_sql_database_instance.state.private_ip_address }
+output "db_user" { value = google_sql_user.runtime.name }
