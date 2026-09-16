@@ -1,0 +1,10 @@
+# Deployment manifest consumed by the runtime worker image.
+# Mirrors the registrations in example_product/app.py.
+application: example-product
+workloads:
+  - name: range.sum
+    version: 1.0.0
+    mode: finite
+    execution_class: lightweight
+    planner: RangeSumPlanner
+    handler: range_sum.partial

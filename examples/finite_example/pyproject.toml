@@ -1,0 +1,15 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "example-product"
+version = "1.0.0"
+description = "Finite range-sum workload example for distributed-runtime"
+requires-python = ">=3.12"
+dependencies = [
+  "distributed-runtime",
+]
+
+[tool.hatch.build.targets.wheel]
+packages = ["example_product"]
