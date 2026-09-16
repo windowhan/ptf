@@ -192,7 +192,12 @@
   ],
   "testing_exports": [
     "AttemptRecord",
+    "ContinuousRuntimeTestKit",
+    "EmissionRecord",
+    "FakeLeaseManager",
     "FiniteRuntimeTestKit",
+    "PartitionRecord",
+    "RecordingSink",
     "RunRecord"
   ]
 }
