@@ -189,5 +189,10 @@
   "root_exports": [
     "RuntimeApplication",
     "__version__"
+  ],
+  "testing_exports": [
+    "AttemptRecord",
+    "FiniteRuntimeTestKit",
+    "RunRecord"
   ]
 }

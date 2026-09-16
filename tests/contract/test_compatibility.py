@@ -15,6 +15,7 @@ import distributed_runtime
 import distributed_runtime.continuous as continuous
 import distributed_runtime.core as core
 import distributed_runtime.finite as finite
+import distributed_runtime.testing as testing
 from distributed_runtime.core import (
     ContinuousPolicy,
     DatabaseCapacity,
@@ -62,6 +63,7 @@ def test_public_api_snapshot() -> None:
         "core_exports": core.__all__,
         "finite_exports": finite.__all__,
         "continuous_exports": continuous.__all__,
+        "testing_exports": testing.__all__,
         "registry_methods": {name: _parameters(getattr(RuntimeRegistry, name)) for name in methods},
     }
 
