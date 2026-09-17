@@ -1,0 +1,10 @@
+# Deployment manifest consumed by the runtime worker image.
+# Mirrors the registrations in crawler_product/app.py.
+application: crawler-product
+workloads:
+  - name: crawl.fetch
+    version: 1.0.0
+    mode: finite
+    execution_class: lightweight
+    planner: CrawlPlanner
+    handler: crawl.fetch.page

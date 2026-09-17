@@ -1,0 +1,16 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "crawler-product"
+version = "1.0.0"
+description = "URL-fetch finite workload example for distributed-runtime"
+requires-python = ">=3.12"
+dependencies = [
+  "distributed-runtime",
+  "httpx>=0.28,<1",
+]
+
+[tool.hatch.build.targets.wheel]
+packages = ["crawler_product"]
