@@ -13,7 +13,12 @@ variable "machine_type" {
   default = "e2-micro"
 }
 variable "subnet_id" {
-  type = string
+  type    = string
+  default = ""
+}
+variable "network" {
+  type    = string
+  default = ""
 }
 variable "service_account" {
   type = string
@@ -37,10 +42,66 @@ variable "role" {
   type    = string
   default = "worker"
 }
+# Spot/preemptible provisioning — cheaper, and each recreation lands a new
+# ephemeral external IP (free egress-IP rotation for crawl workers).
+variable "spot" {
+  type    = bool
+  default = false
+}
+# Attach an ephemeral external IPv4 — required when egress IP diversity is
+# the point (crawling) and no Cloud NAT is in the path.
+variable "external_ip" {
+  type    = bool
+  default = false
+}
+# Fixed-size pools (spot IP workers) skip the autoscaler entirely.
+variable "autoscaled" {
+  type    = bool
+  default = true
+}
+# Extra shell run after secret fetch, before image pull — e.g. tailscale up.
+variable "startup_prelude" {
+  type    = string
+  default = ""
+}
+# env name -> Secret Manager version resource; fetched at boot and passed
+# to the container as -e NAME="$NAME".
+variable "secret_env" {
+  type    = map(string)
+  default = {}
+}
+# env name -> Secret Manager version resource; fetched into shell vars for
+# startup_prelude only — never passed to the container.
+variable "secret_shell" {
+  type    = map(string)
+  default = {}
+}
 
 locals {
-  registry_host  = "${split("-docker.pkg.dev", var.image)[0]}-docker.pkg.dev"
-  env_flags      = join(" ", [for k, v in var.env : "-e ${k}='${v}'"])
+  registry_host = "${split("-docker.pkg.dev", var.image)[0]}-docker.pkg.dev"
+  env_flags     = join(" ", [for k, v in var.env : "-e ${k}='${v}'"])
+  # Bare `-e NAME` — docker reads the value from the exported shell env,
+  # so the secret never appears in the process command line.
+  secret_flags = join(" ", [for k in keys(var.secret_env) : "-e ${k}"])
+  all_secrets  = merge(var.secret_shell, var.secret_env)
+  # Pull each secret version over the metadata-token identity, into shell
+  # vars — retried so a transient Secret Manager error at boot doesn't
+  # leave the instance stranded without its runtime config.
+  secret_helper = length(local.all_secrets) == 0 ? "" : <<-EOT2
+    fetch_secret() {
+      for i in $(seq 1 10); do
+        V=$(curl -sf -H "Authorization: Bearer $TOKEN" \
+          "https://secretmanager.googleapis.com/v1/$1:access" \
+          | sed -E 's/.*"data": ?"([^"]+)".*/\1/' | base64 -d)
+        if [ -n "$V" ]; then echo "$V"; return 0; fi
+        sleep 3
+      done
+      return 1
+    }
+  EOT2
+  secret_fetch = join("\n    ", [
+    for k, v in local.all_secrets : "export ${k}=$(fetch_secret \"${v}\")"
+  ])
   startup_script = <<-EOT
     #!/bin/bash
     set -e
@@ -59,11 +120,14 @@ locals {
       fi
       sleep 5
     done
+    ${local.secret_helper}
+    ${local.secret_fetch}
+    ${var.startup_prelude}
     until docker pull "${var.image}"; do sleep 5; done
     # The worker must tolerate booting before the schema migration job has
     # run (the MIG comes up during apply, migrate runs after) and transient
     # DB/control-plane outages — restart on exit instead of giving up.
-    until docker run --rm --name worker --network host ${local.env_flags} "${var.image}" ${var.role}; do
+    until docker run --rm --name worker --network host ${local.env_flags} ${local.secret_flags} "${var.image}" ${var.role}; do
       echo "worker exited; restarting in 10s"
       sleep 10
     done
@@ -85,7 +149,19 @@ resource "google_compute_instance_template" "worker" {
   }
 
   network_interface {
-    subnetwork = var.subnet_id
+    network    = var.subnet_id == "" ? var.network : null
+    subnetwork = var.subnet_id != "" ? var.subnet_id : null
+    dynamic "access_config" {
+      for_each = var.external_ip ? [1] : []
+      content {}
+    }
+  }
+
+  scheduling {
+    automatic_restart   = !var.spot
+    on_host_maintenance = var.spot ? "TERMINATE" : "MIGRATE"
+    preemptible         = var.spot
+    provisioning_model  = var.spot ? "SPOT" : "STANDARD"
   }
 
   service_account {
@@ -136,6 +212,7 @@ resource "google_compute_region_instance_group_manager" "workers" {
 }
 
 resource "google_compute_region_autoscaler" "workers" {
+  count   = var.autoscaled ? 1 : 0
   project = var.project
   name    = "${var.name}-autoscaler"
   region  = var.region
@@ -150,7 +227,7 @@ resource "google_compute_region_autoscaler" "workers" {
     # scale-down gate. 60s keeps the scenario inside its wait budget while
     # still exercising the real autoscaler path.
     scale_in_control {
-      time_window_sec          = 60
+      time_window_sec = 60
       max_scaled_in_replicas { fixed = 1 }
     }
   }
@@ -158,3 +235,4 @@ resource "google_compute_region_autoscaler" "workers" {
 
 output "mig_name" { value = google_compute_region_instance_group_manager.workers.name }
 output "template_id" { value = google_compute_instance_template.worker.id }
+output "startup_script" { value = local.startup_script }

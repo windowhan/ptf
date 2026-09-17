@@ -7,6 +7,6 @@ WORKDIR /app
 COPY dist/*.whl /tmp/wheels/
 RUN pip install --no-cache-dir \
       "distributed-runtime[gcp,postgres] @ file:///tmp/wheels/distributed_runtime-0.1.0-py3-none-any.whl" \
-      $(find /tmp/wheels -name 'example_*.whl') \
+      $(find /tmp/wheels -name '*.whl' ! -name 'distributed_runtime-*') \
  && rm -rf /tmp/wheels
 ENTRYPOINT ["python", "-m", "distributed_runtime"]
