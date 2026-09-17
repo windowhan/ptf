@@ -113,8 +113,8 @@ resource "google_compute_region_instance_group_manager" "workers" {
     minimal_action                 = "REPLACE"
     most_disruptive_allowed_action = "REPLACE"
     # regional MIGs require these fixed values to be 0 or >= zone count
-    max_surge_fixed                = 3
-    max_unavailable_fixed          = 0
+    max_surge_fixed       = 3
+    max_unavailable_fixed = 0
   }
 }
 

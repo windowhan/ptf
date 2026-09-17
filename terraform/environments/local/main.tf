@@ -48,6 +48,12 @@ variable "pool_revision" {
   type    = string
   default = "rev-a"
 }
+# Additional pool revisions to keep subscriptions alive for — runs pinned to
+# an older execution revision keep dispatching while workers roll over.
+variable "extra_pool_revisions" {
+  type    = list(string)
+  default = []
+}
 
 provider "google" {
   project = var.project
@@ -95,7 +101,7 @@ module "cloudsql" {
 module "pubsub" {
   source         = "../../modules/pubsub"
   project        = var.project
-  pool_revisions = [var.pool_revision]
+  pool_revisions = concat([var.pool_revision], var.extra_pool_revisions)
   depends_on     = [module.apis]
 }
 

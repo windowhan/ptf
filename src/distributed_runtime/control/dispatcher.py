@@ -34,13 +34,11 @@ class OutboxDispatcher:
         engine: StateEngine,
         *,
         application: str,
-        runtime_pool_revision: str,
         dispatch_topic: str,
     ) -> None:
         self._engine = engine
         self._outbox = OutboxStore(engine)
         self._application = application
-        self._pool_revision = runtime_pool_revision
         self._dispatch_topic = dispatch_topic
 
     async def cycle(self, sender: Sender, *, limit: int = 100) -> DispatchCycle:
@@ -57,7 +55,8 @@ class OutboxDispatcher:
                     SELECT u.run_id, u.unit_key, u.attempt_count,
                            p.unit->>'handler' AS handler,
                            p.unit->>'execution_class' AS execution_class,
-                           r.workload_name, r.workload_version
+                           r.workload_name, r.workload_version,
+                           r.execution_revision
                     FROM runtime_state.finite_units u
                     JOIN runtime_state.finite_plan_units p
                       ON p.run_id = u.run_id AND p.unit_key = u.unit_key
@@ -85,7 +84,7 @@ class OutboxDispatcher:
                     handler=str(row["handler"]),
                     attempt_generation=int(row["attempt_count"]) + 1,
                     execution_class=str(row["execution_class"]),
-                    runtime_pool_revision=self._pool_revision,
+                    runtime_pool_revision=str(row["execution_revision"]),
                     published_at=datetime.now(UTC).isoformat(),
                     payload={"unit_key": str(row["unit_key"])},
                 )

@@ -183,7 +183,6 @@ async def run_control(
             engine=engine,
             dispatch_topic=config.dispatch_topic,
             application=str(finite_registry.application),
-            runtime_pool_revision=config.pool_revision,
         )
 
         async def plan_pending() -> int:
@@ -201,7 +200,6 @@ async def run_control(
             application=(
                 str(finite_registry.application) if finite_registry is not None else "runtime"
             ),
-            runtime_pool_revision=config.pool_revision,
             dispatch_topic=config.dispatch_topic,
         )
         send = _pubsub_sender(config)

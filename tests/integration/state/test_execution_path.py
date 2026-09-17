@@ -84,7 +84,6 @@ async def _setup(dsn: str) -> tuple[StateEngine, RuntimeClient, PlannerRunner, F
         engine=engine,
         dispatch_topic="runtime-units",
         application="example-product",
-        runtime_pool_revision="local",
     )
     worker = FiniteWorker(
         registry=app.registry,
@@ -137,6 +136,9 @@ def test_plan_persists_dispatch_outbox_rows(clean_state: str) -> None:
             await planner.plan(submitted.run_id)
             pending = await OutboxStore(engine).pending()
             assert all(m.kind == "unit_dispatch" for m in pending)
+            # dispatch wakeups carry the run's pinned execution revision so
+            # per-revision subscriptions route them to the right pool
+            assert all(m.envelope.runtime_pool_revision == "rev:1" for m in pending)
             return len(pending)
         finally:
             await engine.close()
@@ -179,7 +181,6 @@ def test_retryable_failure_reschedules_then_succeeds(clean_state: str) -> None:
             engine=engine,
             dispatch_topic="runtime-units",
             application="example-product",
-            runtime_pool_revision="local",
         )
         worker = FiniteWorker(
             registry=app.registry,
@@ -239,7 +240,6 @@ def test_permanent_failure_dead_letters(clean_state: str) -> None:
             engine=engine,
             dispatch_topic="runtime-units",
             application="example-product",
-            runtime_pool_revision="local",
         )
         worker = FiniteWorker(
             registry=app.registry,
@@ -327,18 +327,22 @@ def test_dispatcher_enqueues_due_retries(clean_state: str) -> None:
             dispatcher = OutboxDispatcher(
                 engine,
                 application="example-product",
-                runtime_pool_revision="local",
                 dispatch_topic="runtime-unit-dispatch",
             )
-            sent: list[str] = []
+            sent: list[OutboxMessage] = []
 
             async def sender(m: OutboxMessage) -> None:
-                sent.append(m.dedup_key)
+                sent.append(m)
 
             cycle = await dispatcher.cycle(sender)
             assert cycle.retries_enqueued == 1
             assert cycle.published >= 1
-            assert any("retry:1" in k for k in sent)
+            keys = [m.dedup_key for m in sent]
+            assert any("retry:1" in k for k in keys)
+            retry = next(m for m in sent if "retry:1" in m.dedup_key)
+            # retries route to the run's pinned execution revision, not the
+            # control plane's own pool revision
+            assert retry.envelope.runtime_pool_revision == "rev:1"
             return cycle.retries_enqueued
         finally:
             await engine.close()

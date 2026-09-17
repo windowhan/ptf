@@ -45,14 +45,12 @@ class PlannerRunner:
         engine: StateEngine,
         dispatch_topic: str,
         application: str,
-        runtime_pool_revision: str,
     ) -> None:
         self._registry = registry
         self._engine = engine
         self._store = FiniteStateStore(engine)
         self._dispatch_topic = dispatch_topic
         self._application = application
-        self._pool_revision = runtime_pool_revision
 
     async def plan(self, run_id: RunId) -> PlanOutcome:
         """Run the pinned planner, persist plan + dispatch intents atomically."""
@@ -103,7 +101,7 @@ class PlannerRunner:
             handler=unit.handler,
             attempt_generation=1,
             execution_class=unit.execution_class,
-            runtime_pool_revision=self._pool_revision,
+            runtime_pool_revision=str(run.execution_revision),
             published_at=datetime.now(UTC).isoformat(),
             payload={"unit_key": unit.unit_key},
         )
