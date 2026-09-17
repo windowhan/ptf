@@ -54,6 +54,12 @@ variable "extra_pool_revisions" {
   type    = list(string)
   default = []
 }
+# Deployer identity allowed to act as the control service account — Cloud
+# Scheduler's oauth_token requires iam.serviceAccounts.actAs at creation.
+variable "deployer_sa" {
+  type    = string
+  default = ""
+}
 
 provider "google" {
   project = var.project
@@ -73,9 +79,10 @@ module "network" {
 }
 
 module "iam" {
-  source     = "../../modules/iam"
-  project    = var.project
-  depends_on = [module.apis]
+  source         = "../../modules/iam"
+  project        = var.project
+  control_act_as = var.deployer_sa == "" ? [] : ["serviceAccount:${var.deployer_sa}"]
+  depends_on     = [module.apis]
 }
 
 module "registry" {
@@ -137,18 +144,31 @@ module "mig" {
 }
 
 module "cloudrun" {
-  source             = "../../modules/cloudrun"
-  project            = var.project
-  region             = var.region
-  image              = var.control_image
-  service_account    = module.iam.control_email
-  network_id         = module.network.network_id
-  subnet_id          = module.network.subnet_id
-  env                = local.runtime_env
+  source          = "../../modules/cloudrun"
+  project         = var.project
+  region          = var.region
+  image           = var.control_image
+  service_account = module.iam.control_email
+  network_id      = module.network.network_id
+  subnet_id       = module.network.subnet_id
+  env = merge(local.runtime_env, {
+    # reconcile is driven by the Scheduler-triggered job, not the control loop
+    RUNTIME_CONTROL_RECONCILER = "off"
+  })
   min_instance_count = 1 # control loops must always run in this env
   driver_image       = var.driver_image
-  depends_on         = [module.apis]
+  driver_env = {
+    RUNTIME_API_NAME   = "runtime-control-api"
+    RUNTIME_ADMIN_NAME = "runtime-control-admin"
+  }
+  api_services   = ["api", "admin"]
+  api_invokers   = ["serviceAccount:${module.iam.control_email}"]
+  admin_invokers = ["serviceAccount:${module.iam.control_email}"]
+  reconcile_job  = true
+  depends_on     = [module.apis]
 }
+
+output "api_urls" { value = module.cloudrun.api_urls }
 
 module "observability" {
   source     = "../../modules/observability"

@@ -57,6 +57,13 @@ resource "google_project_iam_member" "control_logging" {
   member  = "serviceAccount:${google_service_account.control.email}"
 }
 
+# Resolve API service URIs at runtime (E2E driver, service discovery)
+resource "google_project_iam_member" "control_run_view" {
+  project = var.project
+  role    = "roles/run.viewer"
+  member  = "serviceAccount:${google_service_account.control.email}"
+}
+
 # DB password lives in Secret Manager; only the runtime identities read it
 resource "google_secret_manager_secret" "db_password" {
   project   = var.project
@@ -78,6 +85,20 @@ resource "google_secret_manager_secret_iam_member" "control_db" {
   secret_id = google_secret_manager_secret.db_password.id
   role      = "roles/secretmanager.secretAccessor"
   member    = "serviceAccount:${google_service_account.control.email}"
+}
+
+# Identities allowed to act as the control service account — needed by the
+# deployer that configures Cloud Scheduler oauth_token on the reconcile job.
+variable "control_act_as" {
+  type    = list(string)
+  default = []
+}
+
+resource "google_service_account_iam_member" "control_act_as" {
+  for_each           = toset(var.control_act_as)
+  service_account_id = google_service_account.control.id
+  role               = "roles/iam.serviceAccountUser"
+  member             = each.value
 }
 
 output "worker_email" { value = google_service_account.worker.email }

@@ -17,6 +17,7 @@ variable "services" {
     "iam.googleapis.com",
     "monitoring.googleapis.com",
     "logging.googleapis.com",
+    "cloudscheduler.googleapis.com",
   ]
 }
 

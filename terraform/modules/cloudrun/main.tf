@@ -116,6 +116,12 @@ variable "driver_image" {
   type    = string
   default = ""
 }
+# Extra env for the driver container only (API service names to resolve,
+# scenario flags) — keeps test wiring out of the control env.
+variable "driver_env" {
+  type    = map(string)
+  default = {}
+}
 
 resource "google_cloud_run_v2_job" "driver" {
   count               = var.driver_image != "" ? 1 : 0
@@ -140,6 +146,129 @@ resource "google_cloud_run_v2_job" "driver" {
       containers {
         image = var.driver_image
         dynamic "env" {
+          for_each = merge(var.env, var.driver_env)
+          content {
+            name  = env.key
+            value = env.value
+          }
+        }
+      }
+    }
+  }
+}
+
+# Client/admin JSON APIs — separate services so IAM can grant invoker per
+# surface. `api` serves run submit/inspect/results/cancel; `admin` serves
+# deployment lifecycle. Both stay internal-ingress only.
+variable "api_services" {
+  type    = list(string)
+  default = []
+  validation {
+    condition     = alltrue([for r in var.api_services : contains(["api", "admin"], r)])
+    error_message = "api_services may only contain \"api\" or \"admin\""
+  }
+}
+# Full IAM member strings ("serviceAccount:...", "user:...") allowed to call
+# each API surface. Keep admin_invokers tight — it controls deployments.
+variable "api_invokers" {
+  type    = list(string)
+  default = []
+}
+variable "admin_invokers" {
+  type    = list(string)
+  default = []
+}
+
+locals {
+  api_invokers = {
+    api   = var.api_invokers
+    admin = var.admin_invokers
+  }
+}
+
+resource "google_cloud_run_v2_service" "api" {
+  for_each            = toset(var.api_services)
+  project             = var.project
+  name                = "${var.name}-${each.value}"
+  location            = var.region
+  ingress             = "INGRESS_TRAFFIC_INTERNAL_ONLY"
+  deletion_protection = false
+
+  template {
+    service_account = var.service_account
+    scaling {
+      min_instance_count = 0
+      max_instance_count = 3
+    }
+    vpc_access {
+      network_interfaces {
+        network    = var.network_id
+        subnetwork = var.subnet_id
+      }
+      egress = "PRIVATE_RANGES_ONLY"
+    }
+    containers {
+      image = var.image
+      args  = [each.value]
+      dynamic "env" {
+        for_each = var.env
+        content {
+          name  = env.key
+          value = env.value
+        }
+      }
+    }
+  }
+}
+
+resource "google_cloud_run_v2_service_iam_member" "api_invoker" {
+  for_each = toset(flatten([
+    for role in var.api_services : [
+      for member in local.api_invokers[role] : "${role}|${member}"
+    ]
+  ]))
+  project  = var.project
+  location = var.region
+  name     = google_cloud_run_v2_service.api[split("|", each.value)[0]].name
+  role     = "roles/run.invoker"
+  member   = split("|", each.value)[1]
+}
+
+# One-shot reconcile pass driven by Cloud Scheduler instead of an in-process
+# loop — survives control-service scale-to-zero and matches the plan's
+# scheduled-reconciliation topology.
+variable "reconcile_job" {
+  type    = bool
+  default = false
+}
+variable "reconcile_schedule" {
+  type    = string
+  default = "* * * * *"
+}
+
+resource "google_cloud_run_v2_job" "reconcile" {
+  count               = var.reconcile_job ? 1 : 0
+  project             = var.project
+  name                = "${var.name}-reconcile"
+  location            = var.region
+  deletion_protection = false
+
+  template {
+    task_count = 1
+    template {
+      service_account = var.service_account
+      max_retries     = 0
+      vpc_access {
+        network_interfaces {
+          network    = var.network_id
+          subnetwork = var.subnet_id
+        }
+        egress = "PRIVATE_RANGES_ONLY"
+      }
+      containers {
+        image = var.image
+        args  = ["reconcile"]
+        dynamic "env" {
           for_each = var.env
           content {
             name  = env.key
@@ -151,6 +280,33 @@ resource "google_cloud_run_v2_job" "driver" {
   }
 }
 
+resource "google_cloud_run_v2_job_iam_member" "reconcile_invoker" {
+  count    = var.reconcile_job ? 1 : 0
+  project  = var.project
+  location = var.region
+  name     = google_cloud_run_v2_job.reconcile[0].name
+  role     = "roles/run.invoker"
+  member   = "serviceAccount:${var.service_account}"
+}
+
+resource "google_cloud_scheduler_job" "reconcile" {
+  count    = var.reconcile_job ? 1 : 0
+  project  = var.project
+  name     = "${var.name}-reconcile"
+  region   = var.region
+  schedule = var.reconcile_schedule
+
+  http_target {
+    http_method = "POST"
+    uri         = "https://${var.region}-run.googleapis.com/apis/run.googleapis.com/v1/namespaces/${var.project}/jobs/${google_cloud_run_v2_job.reconcile[0].name}:run"
+    oauth_token {
+      service_account_email = var.service_account
+    }
+  }
+}
+
 output "service_url" { value = google_cloud_run_v2_service.control.uri }
+output "api_urls" { value = { for role, s in google_cloud_run_v2_service.api : role => s.uri } }
 output "migrate_job_name" { value = try(google_cloud_run_v2_job.migrate[0].name, null) }
 output "driver_job_name" { value = try(google_cloud_run_v2_job.driver[0].name, null) }
+output "reconcile_job_name" { value = try(google_cloud_run_v2_job.reconcile[0].name, null) }
