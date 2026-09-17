@@ -193,12 +193,20 @@ locals {
   }
 }
 
+# API services are the client-facing surface — IAM (run.invoker) is the
+# boundary, so ingress defaults to ALL. Internal callers inside the VPC still
+# reach them; external clients get 403 without invoker, not a network error.
+variable "api_ingress" {
+  type    = string
+  default = "INGRESS_TRAFFIC_ALL"
+}
+
 resource "google_cloud_run_v2_service" "api" {
   for_each            = toset(var.api_services)
   project             = var.project
   name                = "${var.name}-${each.value}"
   location            = var.region
-  ingress             = "INGRESS_TRAFFIC_INTERNAL_ONLY"
+  ingress             = var.api_ingress
   deletion_protection = false
 
   template {

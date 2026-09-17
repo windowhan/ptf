@@ -60,7 +60,13 @@ locals {
       sleep 5
     done
     until docker pull "${var.image}"; do sleep 5; done
-    docker run --rm --name worker --network host ${local.env_flags} "${var.image}" ${var.role}
+    # The worker must tolerate booting before the schema migration job has
+    # run (the MIG comes up during apply, migrate runs after) and transient
+    # DB/control-plane outages — restart on exit instead of giving up.
+    until docker run --rm --name worker --network host ${local.env_flags} "${var.image}" ${var.role}; do
+      echo "worker exited; restarting in 10s"
+      sleep 10
+    done
   EOT
 }
 
@@ -115,7 +121,18 @@ resource "google_compute_region_instance_group_manager" "workers" {
     # regional MIGs require these fixed values to be 0 or >= zone count
     max_surge_fixed       = 3
     max_unavailable_fixed = 0
+    # Proactive zone rebalancing churns instances during stockouts — a
+    # zone that can't provision gets retried forever. ANY lets the MIG
+    # place workers wherever capacity exists.
+    instance_redistribution_type = "NONE"
   }
+
+  distribution_policy_target_shape = "ANY"
+
+  # The autoscaler owns target_size after creation — resizing an autoscaled
+  # MIG from terraform is rejected (412). Set it once at create time and
+  # let the autoscaler (or the E2E driver's scale scenario) manage it.
+  lifecycle { ignore_changes = [target_size] }
 }
 
 resource "google_compute_region_autoscaler" "workers" {
@@ -129,6 +146,13 @@ resource "google_compute_region_autoscaler" "workers" {
     max_replicas = var.max_replicas
     cpu_utilization { target = 0.7 }
     cooldown_period = 120
+    # Default scale-in stabilization is 600s — far longer than the E2E
+    # scale-down gate. 60s keeps the scenario inside its wait budget while
+    # still exercising the real autoscaler path.
+    scale_in_control {
+      time_window_sec          = 60
+      max_scaled_in_replicas { fixed = 1 }
+    }
   }
 }
 

@@ -66,6 +66,28 @@ resource "google_pubsub_subscription" "dead_letter_all" {
   expiration_policy { ttl = "" }
 }
 
+# Dead-letter forwarding is performed by the Pub/Sub service account: it
+# needs publish on the DLQ topic and subscriber on each source subscription,
+# otherwise poisoned messages are dropped silently after max attempts.
+data "google_project" "this" {
+  project_id = var.project
+}
+
+resource "google_pubsub_topic_iam_member" "dead_letter_publish" {
+  project = var.project
+  topic   = google_pubsub_topic.dead_letter.name
+  role    = "roles/pubsub.publisher"
+  member  = "serviceAccount:service-${data.google_project.this.number}@gcp-sa-pubsub.iam.gserviceaccount.com"
+}
+
+resource "google_pubsub_subscription_iam_member" "dead_letter_source" {
+  for_each     = google_pubsub_subscription.workers
+  project      = var.project
+  subscription = each.value.name
+  role         = "roles/pubsub.subscriber"
+  member       = "serviceAccount:service-${data.google_project.this.number}@gcp-sa-pubsub.iam.gserviceaccount.com"
+}
+
 output "dispatch_topic" { value = google_pubsub_topic.unit_dispatch.name }
 output "dead_letter_topic" { value = google_pubsub_topic.dead_letter.name }
 output "dead_letter_subscription" { value = google_pubsub_subscription.dead_letter_all.name }

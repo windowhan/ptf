@@ -19,6 +19,11 @@ variable "ha" {
   type    = bool
   default = false
 }
+variable "max_connections" {
+  type    = number
+  default = 100
+}
+
 variable "pitr_enabled" {
   type    = bool
   default = true
@@ -46,6 +51,13 @@ resource "google_sql_database_instance" "state" {
     tier              = var.tier
     edition           = "ENTERPRISE"
     availability_type = var.ha ? "REGIONAL" : "ZONAL"
+
+    # db-f1-micro defaults to max_connections=25 — too few for a fleet of
+    # pooled asyncpg clients (workers + control + api + jobs). Raise it.
+    database_flags {
+      name  = "max_connections"
+      value = var.max_connections
+    }
 
     ip_configuration {
       ipv4_enabled    = false
