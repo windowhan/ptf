@@ -38,12 +38,30 @@
 - Continuous partition 소유권을 실제 DB에서 관리하는 조정 작업
 - Finite 구간 합과 Continuous shard pulse 예제 (`examples/`)
 - Terraform GCP 인프라 모듈 (`terraform/`, docker로 fmt/validate 검증)
+- `python -m distributed_runtime <role>` 배포 진입점 — env 설정,
+  Secret Manager 조회, worker/control/migrate 루프, health 응답
+- 실제 GCP 배포 경로: private Cloud SQL, Pub/Sub dispatch/event,
+  COS 기반 MIG worker, Cloud Run control·migration·driver job
+- VPC 안에서 실행되는 GCP E2E driver (`scripts/e2e/gcp_driver.py`)
+
+다음 항목은 실제 GCP에서 검증됐다.
+
+- Finite run 제출부터 결과 완료까지의 전체 경로
+- Continuous partition 할당과 event emission (Pub/Sub events 토픽)
+- worker heartbeat 중단 후 다른 worker의 partition 인수와
+  fencing token 증가
+- 이전 owner의 emission이 fencing 검사에 거부되는 것
+- Terraform apply로 provisioning하고 destroy로 전부 정리하는 것
 
 다음 항목은 아직 검증되지 않았다.
 
-- 실제 GCP credential을 사용한 배포와 전체 경로 검증 — Terraform
-  모듈은 validate까지 확인됐으며, 실제 provisioning과 E2E는
-  credential이 있는 환경에서 진행한다.
+- `implementation-plan.md`의 확장 시나리오 — 의도적 실패의 DLQ
+  이동, retry/rate-limit/timeout/중복 메시지 주입, MIG
+  autoscaling, revision 고정 run, continuous rebalance, alert
+  fire/resolve 증거
+- 사용자용/관리자용 HTTP API service와 Cloud Scheduler 기반
+  reconciler job — 현재 control plane은 내부 loop만 실행한다.
+- Cloud Storage artifact adapter와 revision별 subscription 분리
 
 ## 권장 읽기 순서
 
@@ -133,4 +151,5 @@
 - package version: `0.1.0`
 - Python: `>=3.12`
 - 실행에 필요한 외부 Python package: 없음
-- 로컬 검증 결과: 188개 테스트, branch coverage 94%
+- 로컬 검증 결과: 243개 테스트, coverage 91%
+- 실제 GCP E2E 결과: finite/continuous/failover/fencing 전 단계 통과

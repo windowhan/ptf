@@ -20,24 +20,32 @@
 
 | Gate | 내용 | 상태 |
 |---|---|---|
-| E2E-BOOT | terraform apply + harness/teardown | 스크립트 준비됨 (`scripts/e2e/run_gcp_e2e.sh`) |
-| E2E-FIN | finite 예제 실GCP 실행 | harness 단계 예약됨 |
-| E2E-SCALE | MIG autoscaling 동작 | 미검증 |
-| E2E-CON | continuous failover/rebalance 실측 | 로컬 검증됨, GCP 미검증 |
-| E2E-LOG/METRIC/OBS | Ops Agent, metrics, dashboards | Terraform 모듈만 존재 |
+| E2E-BOOT | terraform apply + teardown | 검증됨 — 전체 apply/destroy 통과 |
+| E2E-FIN | finite 예제 실GCP 실행 | 검증됨 — unit claim·실행·결과 완료 |
+| E2E-CON | continuous failover 실측 | 검증됨 — heartbeat 중단→인수→fencing 거부 |
+| E2E-SCALE | MIG autoscaling 동작 | 미검증 — CPU autoscaler는 배포됨 |
+| E2E-FAIL | 의도 실패→DLQ, retry/timeout/중복 주입 | 미검증 |
+| E2E-REV | revision 고정 run, revision별 subscription | 미검증 — subscription 하나뿐 |
+| E2E-LOG/METRIC/OBS | Ops Agent, metrics, alert fire/resolve | Terraform 모듈만 존재 |
 | FT-MIGRATE/UPGRADE/SQL-FAIL | 혼합 fleet, canary, SQL failover | 미검증 |
 | E2E-CUSTOM/CLEAN | custom metric, artifact cleanup | 미검증 |
 
 ## 실행 방법
 
-```bash
-gcloud auth login
-scripts/e2e/run_gcp_e2e.sh <project-id> [region]
-```
+실제 검증은 VPC 안에서 실행되는 Cloud Run driver job으로 진행했다
+(`runtime-control-e2e-driver`). DB가 private-only라 로컬에서 직접
+붙을 수 없기 때문이다. 절차:
 
-harness는 terraform apply → 예제 실행 → destroy 순서로 진행하며,
-각 단계가 implementation-plan gate 이름을 출력한다. 어느 단계에서
-실패했는지 바로 알 수 있다.
+1. runtime wheel과 예제 wheel을 빌드하고 `Dockerfile`로 이미지를
+   만들어 Artifact Registry에 push한다.
+2. `Dockerfile.driver`로 driver 이미지를 만들어 push한다.
+3. terraform apply에 `worker_image`/`control_image`/`driver_image`
+   변수로 실제 이미지를 전달한다.
+4. migration job을 실행해 schema를 적용한다.
+5. driver job을 실행해 finite→continuous→failover→fencing을 검증한다.
+6. terraform destroy로 정리한다.
+
+로컬 `scripts/e2e/run_gcp_e2e.sh`는 위 절차를 감싸는 harness 자리다.
 
 ## 비용 추정 (us-central1, on-demand)
 
