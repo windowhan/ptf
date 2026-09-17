@@ -22,11 +22,26 @@ PULSES_PER_SHARD = 3
 
 
 class ShardPulseWorkload:
-    """Discover fixed shards and emit a bounded pulse stream per shard."""
+    """Discover fixed shards and emit a bounded pulse stream per shard.
 
-    name = "shard.pulse"
+    ``shard_count``/``pulses_per_shard`` are construction-time so a
+    product can serve differently sized topologies under distinct
+    workload names (e.g. the 6-way ``shard.hex`` for rebalance checks).
+    """
+
     version = "1.0.0"
     mode = WorkloadMode.CONTINUOUS
+
+    def __init__(
+        self,
+        *,
+        name: str = "shard.pulse",
+        shard_count: int = SHARD_COUNT,
+        pulses_per_shard: int = PULSES_PER_SHARD,
+    ) -> None:
+        self.name = name
+        self._shard_count = shard_count
+        self._pulses_per_shard = pulses_per_shard
 
     async def discover_partitions(self) -> Sequence[Partition]:
         """Return the desired shard set; the reconciler assigns owners."""
@@ -35,18 +50,18 @@ class ShardPulseWorkload:
                 partition_id=PartitionId(f"shard:{i}"),
                 payload={"shard": i},
             )
-            for i in range(SHARD_COUNT)
+            for i in range(self._shard_count)
         ]
 
     async def run_partition(self, context: PartitionContext, partition: Partition) -> None:
-        """Emit ``PULSES_PER_SHARD`` pulse events, then stop.
+        """Emit ``pulses_per_shard`` pulse events, then stop.
 
         Each event carries the running cumulative count for its shard and
         uses a deterministic ``stable_id`` so at-least-once redelivery
         deduplicates instead of double-counting.
         """
         shard = int(partition.payload["shard"])
-        for tick in range(PULSES_PER_SHARD):
+        for tick in range(self._pulses_per_shard):
             context.cancellation.raise_if_cancelled()
             await context.emit(
                 "pulses",

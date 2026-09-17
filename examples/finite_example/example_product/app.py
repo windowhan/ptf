@@ -1,6 +1,7 @@
 """Composition root for the example product's runtime application."""
 
 from distributed_runtime import RuntimeApplication
+from example_product.workloads.fault_inject import FaultInjectPlanner, inject_unit
 from example_product.workloads.range_sum import RangeSumPlanner, sum_partial
 
 
@@ -13,5 +14,12 @@ def build_application() -> RuntimeApplication:
         execution_class="lightweight",
         planner=RangeSumPlanner(),
         handler=sum_partial,
+    )
+    app.registry.register_finite(
+        name="fault.inject",
+        semantic_version="1.0.0",
+        execution_class="lightweight",
+        planner=FaultInjectPlanner(),
+        handler=inject_unit,
     )
     return app
