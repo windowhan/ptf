@@ -112,10 +112,48 @@ module "pubsub" {
   depends_on     = [module.apis]
 }
 
+# E2E driver identity — keeps scenario-only permissions (MIG resize,
+# monitoring read, Pub/Sub publish/pull) off the control plane SA.
+resource "google_service_account" "e2e_driver" {
+  project      = var.project
+  account_id   = "runtime-e2e-driver"
+  display_name = "Runtime E2E driver job"
+  depends_on   = [module.apis]
+}
+
+resource "google_secret_manager_secret_iam_member" "e2e_driver_db" {
+  project   = var.project
+  secret_id = module.iam.db_password_secret
+  role      = "roles/secretmanager.secretAccessor"
+  member    = "serviceAccount:${google_service_account.e2e_driver.email}"
+}
+
+# Publish poison/duplicate dispatches and pull events/dead-letter subs
+resource "google_project_iam_member" "e2e_driver_pubsub" {
+  project = var.project
+  role    = "roles/pubsub.editor"
+  member  = "serviceAccount:${google_service_account.e2e_driver.email}"
+}
+
+# Scale the worker MIG up/down during the scale scenario
+resource "google_project_iam_member" "e2e_driver_compute" {
+  project = var.project
+  role    = "roles/compute.instanceAdmin.v1"
+  member  = "serviceAccount:${google_service_account.e2e_driver.email}"
+}
+
+# Read alert policies + time series for fire evidence
+resource "google_project_iam_member" "e2e_driver_monitoring" {
+  project = var.project
+  role    = "roles/monitoring.viewer"
+  member  = "serviceAccount:${google_service_account.e2e_driver.email}"
+}
+
 # Shared runtime env for both roles — secret values stay in Secret Manager
 locals {
   runtime_env = {
     RUNTIME_PROJECT            = var.project
+    RUNTIME_REGION             = var.region
     RUNTIME_POOL_REVISION      = var.pool_revision
     RUNTIME_DB_HOST            = module.cloudsql.private_ip
     RUNTIME_DB_NAME            = module.cloudsql.database
@@ -154,15 +192,23 @@ module "cloudrun" {
   env = merge(local.runtime_env, {
     # reconcile is driven by the Scheduler-triggered job, not the control loop
     RUNTIME_CONTROL_RECONCILER = "off"
+    # tighter windows keep scheduler-paced failover under the 150s gate
+    RUNTIME_STALE_WORKER_SECONDS = "60"
+    RUNTIME_LEASE_SECONDS        = "45"
   })
   min_instance_count = 1 # control loops must always run in this env
   driver_image       = var.driver_image
+  # the driver runs as its own SA — admin stays invoker-less for it
+  driver_service_account = google_service_account.e2e_driver.email
   driver_env = {
-    RUNTIME_API_NAME   = "runtime-control-api"
-    RUNTIME_ADMIN_NAME = "runtime-control-admin"
+    RUNTIME_API_URL             = module.cloudrun.api_urls["api"]
+    RUNTIME_ADMIN_URL           = module.cloudrun.api_urls["admin"]
+    RUNTIME_MIG_NAME            = module.mig.mig_name
+    RUNTIME_DLQ_SUBSCRIPTION    = module.pubsub.dead_letter_subscription
+    RUNTIME_EVENTS_SUBSCRIPTION = module.pubsub.events_subscription
   }
   api_services   = ["api", "admin"]
-  api_invokers   = ["serviceAccount:${module.iam.control_email}"]
+  api_invokers   = ["serviceAccount:${module.iam.control_email}", "serviceAccount:${google_service_account.e2e_driver.email}"]
   admin_invokers = ["serviceAccount:${module.iam.control_email}"]
   reconcile_job  = true
   depends_on     = [module.apis]

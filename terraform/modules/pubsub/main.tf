@@ -56,8 +56,19 @@ resource "google_pubsub_subscription" "workers" {
   expiration_policy { ttl = "" }
 }
 
+# Pull-everything subscription on the dead-letter topic — verification and
+# operators inspect poisoned deliveries here instead of losing them.
+resource "google_pubsub_subscription" "dead_letter_all" {
+  project = var.project
+  name    = "${var.name}-dead-letter-all"
+  topic   = google_pubsub_topic.dead_letter.id
+
+  expiration_policy { ttl = "" }
+}
+
 output "dispatch_topic" { value = google_pubsub_topic.unit_dispatch.name }
 output "dead_letter_topic" { value = google_pubsub_topic.dead_letter.name }
+output "dead_letter_subscription" { value = google_pubsub_subscription.dead_letter_all.name }
 output "events_topic" { value = google_pubsub_topic.events.name }
 output "events_subscription" { value = google_pubsub_subscription.events_all.name }
 output "worker_subscriptions" { value = { for k, s in google_pubsub_subscription.workers : k => s.name } }

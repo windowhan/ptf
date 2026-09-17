@@ -122,6 +122,13 @@ variable "driver_env" {
   type    = map(string)
   default = {}
 }
+# Separate identity for the E2E driver so scenario permissions (MIG resize,
+# monitoring read, Pub/Sub publish) never land on the control plane SA.
+# Empty falls back to the control service account.
+variable "driver_service_account" {
+  type    = string
+  default = ""
+}
 
 resource "google_cloud_run_v2_job" "driver" {
   count               = var.driver_image != "" ? 1 : 0
@@ -133,9 +140,9 @@ resource "google_cloud_run_v2_job" "driver" {
   template {
     task_count = 1
     template {
-      service_account = var.service_account
+      service_account = coalesce(var.driver_service_account, var.service_account)
       max_retries     = 0
-      timeout         = "1200s"
+      timeout         = "3600s"
       vpc_access {
         network_interfaces {
           network    = var.network_id
@@ -298,7 +305,7 @@ resource "google_cloud_scheduler_job" "reconcile" {
 
   http_target {
     http_method = "POST"
-    uri         = "https://${var.region}-run.googleapis.com/apis/run.googleapis.com/v1/namespaces/${var.project}/jobs/${google_cloud_run_v2_job.reconcile[0].name}:run"
+    uri         = "https://run.googleapis.com/v2/projects/${var.project}/locations/${var.region}/jobs/${google_cloud_run_v2_job.reconcile[0].name}:run"
     oauth_token {
       service_account_email = var.service_account
     }
