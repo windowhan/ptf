@@ -98,6 +98,13 @@ class PubSubTransport:
                 except queue.Empty:
                     await asyncio.sleep(0.05)
                     continue
-                yield VersionedEnvelope.from_json(message.data), message
+                try:
+                    envelope = VersionedEnvelope.from_json(message.data)
+                except Exception:
+                    # Poison pill: nack so the dead-letter policy takes it
+                    # instead of crashing the stream and holding the lease.
+                    message.nack()
+                    continue
+                yield envelope, message
         finally:
             streaming.cancel()

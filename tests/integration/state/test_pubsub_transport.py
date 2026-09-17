@@ -11,6 +11,7 @@ import os
 import socket
 
 import pytest
+from google.cloud import pubsub_v1
 
 os.environ.setdefault("PUBSUB_EMULATOR_HOST", "localhost:58085")
 
@@ -89,3 +90,25 @@ def test_envelope_survives_transport_intact() -> None:
 
     result = asyncio.run(asyncio.wait_for(exercise(), timeout=30))
     assert result.to_dict() == _envelope(7).to_dict()
+
+
+@requires_pubsub
+def test_poison_message_is_nacked_stream_survives() -> None:
+    """A malformed payload nacks (→ dead-letter in GCP) instead of
+    killing the consume stream; valid deliveries keep flowing."""
+
+    async def exercise() -> VersionedEnvelope:
+        transport = PubSubTransport(CONFIG)
+        transport.ensure_topology()
+        pubsub_v1.PublisherClient().publish(
+            CONFIG.topic_path, b'{"definitely": not-envelope'
+        ).result(timeout=10)
+        transport.publish(_envelope(9))
+        async for envelope, message in transport.stream():
+            message.ack()
+            if envelope.execution_id == "execution:9":
+                return envelope
+        raise AssertionError("stream ended")
+
+    result = asyncio.run(asyncio.wait_for(exercise(), timeout=30))
+    assert result.execution_id == "execution:9"
