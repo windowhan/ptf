@@ -167,6 +167,42 @@ def test_supervisor_runs_partitions_and_emits(clean_state: str) -> None:
 
 
 @requires_postgres
+def test_assignment_spreads_across_live_workers(clean_state: str) -> None:
+    """One reconcile pass must balance partitions — the in-loop load map has
+    to reflect each lease it just granted (regression: all partitions used to
+    land on the first-least-loaded worker because the snapshot was stale)."""
+
+    async def exercise() -> None:
+        engine, app, admin, reconciler, workers = await _setup(
+            clean_state, EmitOnceStream(count=6)
+        )
+        try:
+            await workers.register(
+                W0, execution_classes=["stateful-stream"], revision=RevisionId("rev:1")
+            )
+            await workers.register(
+                W1, execution_classes=["stateful-stream"], revision=RevisionId("rev:1")
+            )
+            deployment = await admin.deploy(workload="event.stream", version="1.0.0")
+            reg = app.registry.workload("event.stream", "1.0.0", WorkloadMode.CONTINUOUS)
+            assert isinstance(reg, ContinuousRegistration)
+            result = await reconciler.reconcile(
+                deployment.deployment_id,
+                await reg.workload.discover_partitions(),
+            )
+            assert result.assigned == 6
+            partitions = await reconciler._store.partitions(deployment.deployment_id)
+            spread = {
+                w: sum(1 for p in partitions if p.owner_id == w) for w in (W0, W1)
+            }
+            assert spread == {W0: 3, W1: 3}
+        finally:
+            await engine.close()
+
+    asyncio.run(exercise())
+
+
+@requires_postgres
 def test_dead_worker_partitions_get_reclaimed(clean_state: str) -> None:
     async def exercise() -> None:
         engine, app, admin, reconciler, workers = await _setup(clean_state)

@@ -67,6 +67,7 @@ class Reconciler:
         assigned = 0
         reclaimed = 0
         if deployment.status is DeploymentStatus.ACTIVE and active_workers:
+            load = self._load_map(stored, active_workers)
             for partition in stored:
                 if partition.status is PartitionStatus.INACTIVE:
                     continue
@@ -79,7 +80,7 @@ class Reconciler:
                 )
                 if not needs_assign:
                     continue
-                owner = self._least_loaded(stored, active_workers, partition)
+                owner = min(load, key=lambda i: (load[i], str(i)))
                 lease = await self._store.acquire_lease(
                     deployment_id,
                     partition.partition_id,
@@ -87,6 +88,9 @@ class Reconciler:
                     lease_seconds=self._lease_seconds,
                 )
                 if lease is not None:
+                    # reflect the assignment so the next partition sees it —
+                    # the stored snapshot is stale within this loop
+                    load[owner] += partition.weight
                     if partition.owner_id is not None:
                         reclaimed += 1
                     else:
@@ -98,12 +102,11 @@ class Reconciler:
             dead_workers=dead,
         )
 
-    def _least_loaded(
+    def _load_map(
         self,
         partitions: tuple[StoredPartition, ...],
         workers: tuple[WorkerInstance, ...],
-        _target: StoredPartition,
-    ) -> RuntimeInstanceId:
+    ) -> dict[RuntimeInstanceId, int]:
         load = {w.instance_id: 0 for w in workers}
         for partition in partitions:
             if partition.owner_id in load and partition.status in (
@@ -111,4 +114,4 @@ class Reconciler:
                 PartitionStatus.RUNNING,
             ):
                 load[partition.owner_id] += partition.weight
-        return min(load.keys(), key=lambda i: (load[i], str(i)))
+        return load
