@@ -57,30 +57,29 @@
 - VPC 안에서 실행되는 GCP E2E driver (`scripts/e2e/gcp_driver.py`)
   와 harness (`scripts/e2e/run_gcp_e2e.sh`)
 
-다음 항목은 실제 GCP에서 검증됐다.
+다음 항목은 실제 GCP에서 검증됐다 — 드라이버의 전체 시나리오가
+한 번의 Cloud Run job 실행(`runtime-control-e2e-driver-7lzxs`)에서
+`ALL CHECKS PASSED`로 끝났다.
 
 - Finite run 제출부터 결과 완료까지의 전체 경로
-- Continuous partition 할당과 event emission (Pub/Sub events 토픽)
+- `fault.inject` 기반 실패 주입 — permanent→unit dead-letter,
+  retryable/rate-limited/timeout 재시도 후 성공
+- missing revision에 고정된 run이 claim되지 않고 cancel이 반영되는 것
+- 중복 dispatch 재전달이 실행을 중복시키지 않는 것
+- poison 메시지가 Pub/Sub dead-letter 토픽까지 도달하는 경로
+- Continuous partition 할당과 event emission — `shard.pulse` 12건 +
+  `shard.hex` 12건이 `runtime-events` 토픽으로 전달
+- 6 partition이 2+ worker에 가중치 차이 ≤1로 분산되는 것
+- driver 신원의 client API 허용(200) / admin API 거부(403) 분리
+- autoscaler min 증가로 새 worker가 등록되고, 인스턴스 삭제로
+  worker가 레지스트리에서 빠지는 것
 - worker heartbeat 중단 후 다른 worker의 partition 인수와
   fencing token 증가
 - 이전 owner의 emission이 fencing 검사에 거부되는 것
-- Terraform apply로 provisioning하고 destroy로 전부 정리하는 것
-
-다음 항목은 구현됐지만 아직 실GCP에서 실행되지 않았다
-(로컬 게이트와 emulator/Postgres 테스트는 통과).
-
-- `fault.inject` 기반 실패 주입 — permanent→unit dead-letter,
-  retryable/rate-limited/timeout 재시도 후 성공
-- Pub/Sub dead-letter 토픽까지 이어지는 poison 메시지 경로와
-  검증용 `runtime-dead-letter-all` subscription
-- missing revision에 고정된 run이 claim되지 않는 것
-- 중복 dispatch 재전달이 실행을 중복시키지 않는 것
-- 6 partition이 2+ worker에 가중치 차이 ≤1로 분산되는 것
-- MIG 2→3→2 리사이즈와 worker 등록 수렴
-- driver 신원의 client API 허용 / admin API 거부(403) 분리
-- alert 정책 존재와 dead-letter metric 기록 확인
+- dead-letter alert 정책 존재와 DLQ 토픽 metric 기록 확인
 - `api`/`admin` Cloud Run 서비스와 Scheduler→reconcile job의
-  실배포 동작
+  실배포 동작 (stale worker 마킹이 reconcile 경로로 동작)
+- Terraform apply로 provisioning하고 destroy로 전부 정리하는 것
 
 다음 항목은 아직 구현되지 않았다.
 
@@ -177,5 +176,6 @@
 - package version: `0.1.0`
 - Python: `>=3.12`
 - 실행에 필요한 외부 Python package: 없음
-- 로컬 검증 결과: 243개 테스트, coverage 91%
-- 실제 GCP E2E 결과: finite/continuous/failover/fencing 전 단계 통과
+- 로컬 검증 결과: 263개 테스트, coverage 90%
+- 실제 GCP E2E 결과: 전체 10개 시나리오(finite/faults/pin/duplicate/dlq/
+  continuous/api-iam/scale/failover/alerts) 단일 실행 통과

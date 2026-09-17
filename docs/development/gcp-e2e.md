@@ -27,18 +27,23 @@
 
 | Gate | 내용 | 상태 |
 |---|---|---|
+전체 10개 시나리오가 단일 실행(`runtime-control-e2e-driver-7lzxs`)에서
+`ALL CHECKS PASSED`로 통과했다.
+
+| Gate | 내용 | 상태 |
+|---|---|---|
 | E2E-BOOT | terraform apply + teardown | 검증됨 — 전체 apply/destroy 통과 |
 | E2E-FIN | finite 예제 실GCP 실행 | 검증됨 — unit claim·실행·결과 완료 |
-| E2E-CON | continuous failover 실측 | 검증됨 — heartbeat 중단→인수→fencing 거부 |
-| E2E-FAIL | 의도 실패→unit DLQ, retry/rate-limit/timeout, 중복 주입 | 드라이버 구현됨 — 실행 대기 |
-| E2E-DLQ | poison 메시지 → Pub/Sub dead-letter 토픽 | 드라이버+subscription 구현됨 — 실행 대기 |
-| E2E-REV | missing revision 핀 고정 run 미claim | 드라이버 구현됨 — 실행 대기 |
-| E2E-SCALE | MIG 2→3→2 리사이즈 + worker 등록 수렴 | 드라이버 구현됨 — 실행 대기 (CPU autoscaler 자체는 config 검증만) |
-| E2E-IAM | client API 200 / admin API 403 분리 | 드라이버 구현됨 — 실행 대기 |
-| E2E-SPREAD | 6 partition × 2+ worker 가중치 차이 ≤1 | 드라이버 구현됨 — 실행 대기 |
-| E2E-LOG/METRIC/OBS | alert 정책 존재 + dead-letter metric 기록 | 드라이버 구현됨 — 실행 대기 (fire/resolve 인시던트는 확인 안 함) |
-| E2E-API | api/admin Cloud Run 서비스 배포 | Terraform 구현됨 — 실배포 대기 |
-| E2E-SCHED | Cloud Scheduler → reconcile Job | Terraform 구현됨 — 실배포 대기 |
+| E2E-CON | continuous 할당+emission+failover 실측 | 검증됨 — 12+12 이벤트, 인수·fencing 거부 |
+| E2E-FAIL | 의도 실패→unit DLQ, retry/rate-limit/timeout, 중복 주입 | 검증됨 — permanent dead-letter + 재시도 성공 + 중복 무시 |
+| E2E-DLQ | poison 메시지 → Pub/Sub dead-letter 토픽 | 검증됨 — `runtime-dead-letter` 도달 확인 |
+| E2E-REV | missing revision 핀 고정 run 미claim | 검증됨 — unit이 READY 유지, cancel 반영 |
+| E2E-SCALE | autoscaler min 증가→신규 worker 등록, 인스턴스 삭제→해제 | 검증됨 — 등록·해제 수렴 (autoscaled MIG의 직접 resize는 412라 autoscaler 경로 사용) |
+| E2E-IAM | client API 200 / admin API 403 분리 | 검증됨 — driver 신원 기준 |
+| E2E-SPREAD | 6 partition × 2+ worker 가중치 차이 ≤1 | 검증됨 — 3/3 분산 |
+| E2E-LOG/METRIC/OBS | alert 정책 존재 + dead-letter metric 기록 | 검증됨 — 정책+metric 확인 (fire/resolve 인시던트는 확인 안 함) |
+| E2E-API | api/admin Cloud Run 서비스 배포 | 검증됨 — IAM 분리 호출까지 확인 |
+| E2E-SCHED | Cloud Scheduler → reconcile Job | 검증됨 — stale worker 마킹이 reconcile 경로로 동작 |
 | FT-MIGRATE/UPGRADE/SQL-FAIL | 혼합 fleet, canary, SQL failover, migration recovery | 미검증 |
 | E2E-CUSTOM/CLEAN | custom metric, artifact cleanup | 미검증 |
 
