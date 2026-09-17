@@ -166,6 +166,25 @@ reference.verify(downloaded_content)
 크기나 SHA-256이 하나라도 다르면 `InvariantViolationError`가 발생한다. 오류에는
 예상값과 실제값, application, URI가 들어간다.
 
+## GCS에 올리고 내리기
+
+`distributed_runtime.gcp.storage.GcsArtifactStore`가 실제 Cloud Storage와
+주고받는다 — google client library 대신 `AuthorizedSession` JSON API를 쓰므로
+추가 dependency가 없다.
+
+```python
+from distributed_runtime.gcp.storage import GcsArtifactStore
+
+store = GcsArtifactStore.connect(bucket="runtime-artifacts", application="sample-service")
+reference = await store.put("requests/run-1.json", content)   # generation 포함 참조
+content = await store.get(reference)                           # sha256/크기 검증 포함
+await store.delete(reference)
+```
+
+`put`은 GCS 응답의 `generation`을 참조에 넣어 같은 이름이 나중에 덮어써져도
+읽는 내용이 고정되게 한다. `get`은 다운로드한 bytes를 `verify()`로 검사하고
+`delete`는 참조의 application이 store의 것과 다르면 거부한다.
+
 ## Envelope에서 큰 데이터 참조하기
 
 ```python

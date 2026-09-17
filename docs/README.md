@@ -39,10 +39,23 @@
 - Finite 구간 합과 Continuous shard pulse 예제 (`examples/`)
 - Terraform GCP 인프라 모듈 (`terraform/`, docker로 fmt/validate 검증)
 - `python -m distributed_runtime <role>` 배포 진입점 — env 설정,
-  Secret Manager 조회, worker/control/migrate 루프, health 응답
+  Secret Manager 조회, worker/control/migrate 루프, health 응답,
+  `api`/`admin` JSON API 서비스, `reconcile` 일회성 job
+- 사용자용/관리자용 JSON API (`deploy/api.py`) — client는 run
+  제출·조회·결과·취소, admin은 deployment lifecycle. Cloud Run
+  서비스별 IAM invoker 분리
+- Cloud Scheduler → `reconcile` Cloud Run Job 경로와 in-process
+  reconciler loop 선택 (`RUNTIME_CONTROL_RECONCILER`)
+- Cloud Storage artifact adapter (`gcp/storage.py`) — generation
+  고정 참조와 sha256/크기 검증
+- revision별 worker subscription (`pool_revisions`)과 run 고정
+  revision dispatch 라우팅 — `poll` 경로도 run의 고정 revision만
+  claim한다
 - 실제 GCP 배포 경로: private Cloud SQL, Pub/Sub dispatch/event,
-  COS 기반 MIG worker, Cloud Run control·migration·driver job
+  COS 기반 MIG worker, Cloud Run control·api·admin·migration·
+  reconcile·driver job, Cloud Scheduler
 - VPC 안에서 실행되는 GCP E2E driver (`scripts/e2e/gcp_driver.py`)
+  와 harness (`scripts/e2e/run_gcp_e2e.sh`)
 
 다음 항목은 실제 GCP에서 검증됐다.
 
@@ -53,15 +66,28 @@
 - 이전 owner의 emission이 fencing 검사에 거부되는 것
 - Terraform apply로 provisioning하고 destroy로 전부 정리하는 것
 
-다음 항목은 아직 검증되지 않았다.
+다음 항목은 구현됐지만 아직 실GCP에서 실행되지 않았다
+(로컬 게이트와 emulator/Postgres 테스트는 통과).
 
-- `implementation-plan.md`의 확장 시나리오 — 의도적 실패의 DLQ
-  이동, retry/rate-limit/timeout/중복 메시지 주입, MIG
-  autoscaling, revision 고정 run, continuous rebalance, alert
-  fire/resolve 증거
-- 사용자용/관리자용 HTTP API service와 Cloud Scheduler 기반
-  reconciler job — 현재 control plane은 내부 loop만 실행한다.
-- Cloud Storage artifact adapter와 revision별 subscription 분리
+- `fault.inject` 기반 실패 주입 — permanent→unit dead-letter,
+  retryable/rate-limited/timeout 재시도 후 성공
+- Pub/Sub dead-letter 토픽까지 이어지는 poison 메시지 경로와
+  검증용 `runtime-dead-letter-all` subscription
+- missing revision에 고정된 run이 claim되지 않는 것
+- 중복 dispatch 재전달이 실행을 중복시키지 않는 것
+- 6 partition이 2+ worker에 가중치 차이 ≤1로 분산되는 것
+- MIG 2→3→2 리사이즈와 worker 등록 수렴
+- driver 신원의 client API 허용 / admin API 거부(403) 분리
+- alert 정책 존재와 dead-letter metric 기록 확인
+- `api`/`admin` Cloud Run 서비스와 Scheduler→reconcile job의
+  실배포 동작
+
+다음 항목은 아직 구현되지 않았다.
+
+- 혼합 revision fleet 동시 운영, canary 배포, SQL failover,
+  migration recovery 증거
+- custom metric과 artifact 정리(cleanup) 경로
+- alert의 실제 fire→resolve 인시던트 증거
 
 ## 권장 읽기 순서
 
