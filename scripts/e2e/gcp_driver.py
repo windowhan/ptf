@@ -68,9 +68,14 @@ def _env(name: str) -> str | None:
 
 
 def _pull_events(
-    project: str, subscription: str, want: int, timeout: float, workload: str | None = None
-) -> int:
-    """Pull+ack events until ``want`` arrive; optionally filter by workload."""
+    project: str, subscription: str, want: dict[str, int], timeout: float
+) -> dict[str, int]:
+    """Pull+ack events until every workload's ``want`` count arrives.
+
+    All pulled messages are acked — including non-matching ones — so one
+    drain loop must observe every workload at once. Pulling per-workload
+    would ack and discard the other workload's events before its turn.
+    """
     import time
 
     from google.cloud import pubsub_v1
@@ -78,12 +83,13 @@ def _pull_events(
     subscriber = pubsub_v1.SubscriberClient()
     path = subscriber.subscription_path(project, subscription)
     deadline = time.time() + timeout
-    received = 0
-    while received < want and time.time() < deadline:
+    received = {workload: 0 for workload in want}
+    total_want = sum(want.values())
+    while sum(received.values()) < total_want and time.time() < deadline:
         response = subscriber.pull(
             request={
                 "subscription": path,
-                "max_messages": min(20, want - received + 10),
+                "max_messages": min(40, total_want - sum(received.values()) + 10),
                 "return_immediately": True,
             },
             timeout=30,
@@ -91,14 +97,13 @@ def _pull_events(
         ack_ids: list[str] = []
         for message in response.received_messages:
             ack_ids.append(message.ack_id)
-            if workload is not None:
-                try:
-                    data = json.loads(message.message.data)
-                except Exception:
-                    continue
-                if data.get("workload") != workload:
-                    continue
-            received += 1
+            try:
+                data = json.loads(message.message.data)
+            except Exception:
+                continue
+            workload = data.get("workload")
+            if workload in want and received[workload] < want[workload]:
+                received[workload] += 1
         if ack_ids:
             subscriber.acknowledge(request={"subscription": path, "ack_ids": ack_ids})
     return received
@@ -361,12 +366,14 @@ async def scenario_continuous(
         raise RuntimeError(f"ownership spread exceeds weight diff 1: {spread}")
     print(f"[e2e] spread PASS: 6 partitions over {len(spread)} workers → {spread}")
 
-    pulled_pulse = await asyncio.to_thread(
-        _pull_events, config.project, events_sub, EXPECTED_PULSES, 240, "shard.pulse"
+    pulled = await asyncio.to_thread(
+        _pull_events,
+        config.project,
+        events_sub,
+        {"shard.pulse": EXPECTED_PULSES, "shard.hex": EXPECTED_HEX_PULSES},
+        240,
     )
-    pulled_hex = await asyncio.to_thread(
-        _pull_events, config.project, events_sub, EXPECTED_HEX_PULSES, 240, "shard.hex"
-    )
+    pulled_pulse, pulled_hex = pulled["shard.pulse"], pulled["shard.hex"]
     if pulled_pulse < EXPECTED_PULSES or pulled_hex < EXPECTED_HEX_PULSES:
         raise RuntimeError(
             f"events short: pulse={pulled_pulse}/{EXPECTED_PULSES} "
@@ -387,12 +394,12 @@ async def scenario_failover(
     config: DeployConfig,
     **ctx: object,
 ) -> None:
-    cont = ctx.get("continuous")
-    if not isinstance(cont, dict):
+    deployment = ctx.get("pulse_deployment")
+    owners: dict[str, str] = ctx.get("owners")  # type: ignore[assignment]
+    tokens: dict[str, int] = ctx.get("tokens")  # type: ignore[assignment]
+    hex_dep = ctx.get("hex_deployment")
+    if deployment is None or not owners or not tokens or hex_dep is None:
         raise RuntimeError("failover scenario needs continuous results")
-    deployment = cont["pulse_deployment"]
-    owners: dict[str, str] = cont["owners"]  # type: ignore[assignment]
-    tokens: dict[str, int] = cont["tokens"]  # type: ignore[assignment]
     victim = next(iter(set(owners.values())))
 
     async def stale_victim() -> None:
@@ -418,7 +425,7 @@ async def scenario_failover(
 
     async def moved():
         await stale_victim()
-        for dep in (cont["pulse_deployment"], cont["hex_deployment"]):
+        for dep in (deployment, hex_dep):
             view = await admin.view(dep.deployment_id)  # type: ignore[union-attr]
             if any(str(p.owner_id) == victim for p in view.partitions):
                 return None
@@ -474,9 +481,9 @@ async def scenario_api_iam(**_ctx: object) -> None:
 
     def _get(url: str) -> int:
         token = _id_token(url)
-        request = urllib.request.Request(
-            f"{url}/healthz", headers={"Authorization": f"Bearer {token}"}
-        )
+        # /healthz is intercepted by the run.app edge (Google-served 404) —
+        # the app health route on "/" is the reachable check.
+        request = urllib.request.Request(f"{url}/", headers={"Authorization": f"Bearer {token}"})
         try:
             with urllib.request.urlopen(request, timeout=20) as response:
                 return response.status
@@ -500,32 +507,95 @@ async def scenario_scale(engine: StateEngine, config: DeployConfig, **_ctx: obje
         return
     workers = WorkerRegistry(engine)
     session = _authed_session()
-    base = (
+    # The MIG is autoscaled — instanceGroupManagers.resize is rejected (412).
+    # Drive the scale through the autoscaler's min replicas instead, which is
+    # also the realistic path: the autoscaler performs the actual resize.
+    name = f"{mig}-autoscaler"
+    autoscaler = (
+        f"https://compute.googleapis.com/compute/v1/projects/{config.project}"
+        f"/regions/{region}/autoscalers/{name}"
+    )
+    # update/patch address the collection path, not .../autoscalers/{name}
+    collection = autoscaler.rsplit("/", 1)[0]
+
+    def _autoscaler() -> dict:
+        response = session.get(autoscaler)
+        if response.status_code != 200:
+            raise RuntimeError(f"autoscaler get: {response.status_code} {response.text}")
+        return dict(response.json())
+
+    def _resize(size: int) -> None:
+        resource = _autoscaler()
+        policy = dict(resource["autoscalingPolicy"])
+        policy["minNumReplicas"] = size
+        if policy.get("maxNumReplicas", 0) < size:
+            policy["maxNumReplicas"] = size
+        resource["autoscalingPolicy"] = policy
+        response = session.patch(collection, params={"autoscaler": name}, json=resource)
+        if response.status_code != 200:
+            raise RuntimeError(f"autoscaler patch: {response.status_code} {response.text}")
+
+    mig_api = (
         f"https://compute.googleapis.com/compute/v1/projects/{config.project}"
         f"/regions/{region}/instanceGroupManagers/{mig}"
     )
 
-    def _resize(size: int) -> None:
-        response = session.post(f"{base}/resize", params={"size": size})
+    def _managed_instances() -> list[str]:
+        response = session.post(f"{mig_api}/listManagedInstances")
         if response.status_code != 200:
-            raise RuntimeError(f"mig resize {size}: {response.status_code} {response.text}")
+            raise RuntimeError(f"listManagedInstances: {response.status_code} {response.text}")
+        return [
+            item["instance"]
+            for item in response.json().get("managedInstances", [])
+            if item.get("instanceStatus") == "RUNNING"
+        ]
 
-    async def live_count() -> int:
-        return len(await workers.list_active())
+    def _delete_instance(instance: str) -> None:
+        # Autoscaler-driven scale-in is governed by stabilization windows
+        # (minutes even at 60s) — too slow for an E2E gate. The realistic
+        # loss path is instance removal, which deleteInstances performs on
+        # autoscaled MIGs (unlike resize, which is rejected).
+        response = session.post(f"{mig_api}/deleteInstances", json={"instances": [instance]})
+        if response.status_code != 200:
+            raise RuntimeError(f"deleteInstances: {response.status_code} {response.text}")
 
-    before = await live_count()
-    target_up = before + 1
-    await asyncio.to_thread(_resize, target_up)
-    await _wait(lambda: _live_at_least(workers, target_up), 900, "scale-up worker never registered")
-    print(f"[e2e] scale-up PASS: {before} → {target_up} registered workers")
+    async def live_ids() -> set[str]:
+        return {str(w.instance_id) for w in await workers.list_active()}
 
-    await asyncio.to_thread(_resize, before)
-    await _wait(
-        lambda: _live_at_most(workers, before),
-        300,
-        "scale-down worker never deregistered",
+    before = await live_ids()
+    await asyncio.to_thread(_resize, len(before) + 1)
+    added = await _wait(
+        lambda: _new_worker(workers, before), 900, "scale-up worker never registered"
     )
-    print(f"[e2e] scale-down PASS: back to {before} workers")
+    print(f"[e2e] scale-up PASS: new worker {added} registered")
+
+    # Drop the autoscaler floor first, then remove the instance — the MIG
+    # replaces a deleted member while the floor still demands it.
+    await asyncio.to_thread(_resize, len(before))
+    managed = await asyncio.to_thread(_managed_instances)
+    victim = next((url for url in managed if url.endswith(f"/{added}")), None)
+    if victim is None:
+        raise RuntimeError(f"new worker {added} not among managed instances: {managed}")
+    await asyncio.to_thread(_delete_instance, victim)
+    await _wait(
+        lambda: _worker_gone(workers, str(added)),
+        300,
+        f"scale-down worker {added} never deregistered",
+    )
+    print(f"[e2e] scale-down PASS: {added} deregistered after instance loss")
+
+
+async def _new_worker(workers: WorkerRegistry, before: set[str]) -> str | None:
+    live = await workers.list_active()
+    for worker in live:
+        if str(worker.instance_id) not in before:
+            return str(worker.instance_id)
+    return None
+
+
+async def _worker_gone(workers: WorkerRegistry, instance_id: str) -> bool | None:
+    live = await workers.list_active()
+    return True if all(str(w.instance_id) != instance_id for w in live) else None
 
 
 async def _live_at_least(workers: WorkerRegistry, n: int) -> bool | None:
@@ -537,7 +607,12 @@ async def _live_at_most(workers: WorkerRegistry, n: int) -> bool | None:
 
 
 async def scenario_alerts(config: DeployConfig, **_ctx: object) -> None:
-    """Alert policy exists and the dead-letter metric recorded the poison."""
+    """Alert policy exists and the dead-letter topic metric records data.
+
+    The dlq scenario may have run long ago, outside any reasonable
+    lookback — so publish a probe straight to the dead-letter topic and
+    wait for ``send_message_operation_count`` to report it.
+    """
     session = _authed_session()
     response = session.get(
         f"https://monitoring.googleapis.com/v3/projects/{config.project}/alertPolicies"
@@ -548,22 +623,38 @@ async def scenario_alerts(config: DeployConfig, **_ctx: object) -> None:
     if not any("dead-letter" in n for n in names):
         raise RuntimeError(f"dead-letter alert policy missing: {names}")
 
-    start = datetime.now(UTC).timestamp() - 1800
-    params = {
-        "filter": (
-            'metric.type="pubsub.googleapis.com/topic/send_message_operation_count" '
-            'AND resource.labels.topic_id="runtime-dead-letter"'
-        ),
-        "interval.startTime": datetime.fromtimestamp(start, UTC).isoformat(),
-        "interval.endTime": datetime.now(UTC).isoformat(),
-        "view": "HEADERS",
-    }
-    series = session.get(
-        f"https://monitoring.googleapis.com/v3/projects/{config.project}/timeSeries",
-        params=params,
-    )
-    if series.status_code != 200 or not series.json().get("timeSeries"):
-        raise RuntimeError("dead-letter topic metric has no data — alert cannot fire")
+    def _probe() -> None:
+        from google.cloud import pubsub_v1
+
+        publisher = pubsub_v1.PublisherClient()
+        publisher.publish(
+            publisher.topic_path(config.project, "runtime-dead-letter"),
+            b"e2e:alerts-probe",
+        ).result(timeout=30)
+
+    await asyncio.to_thread(_probe)
+
+    def _metric_has_data() -> bool:
+        start = datetime.now(UTC).timestamp() - 600
+        params = {
+            "filter": (
+                'metric.type="pubsub.googleapis.com/topic/send_message_operation_count" '
+                'AND resource.labels.topic_id="runtime-dead-letter"'
+            ),
+            "interval.startTime": datetime.fromtimestamp(start, UTC).isoformat(),
+            "interval.endTime": datetime.now(UTC).isoformat(),
+            "view": "HEADERS",
+        }
+        series = session.get(
+            f"https://monitoring.googleapis.com/v3/projects/{config.project}/timeSeries",
+            params=params,
+        )
+        return series.status_code == 200 and bool(series.json().get("timeSeries"))
+
+    async def _poll_metric() -> bool:
+        return await asyncio.to_thread(_metric_has_data)
+
+    await _wait(_poll_metric, 300, "dead-letter topic metric never recorded the probe")
     print("[e2e] alerts PASS: dead-letter policy present, metric recording")
 
 
