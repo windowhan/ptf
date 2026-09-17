@@ -1,0 +1,16 @@
+#!/usr/bin/env bash
+# Local shim: delegate `terraform` to the dockerized hashicorp/terraform image.
+# Translates host -chdir paths into the repo mount so the E2E harness can run
+# unmodified on machines without a local terraform install.
+ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+args=()
+for a in "$@"; do
+  case "$a" in
+    -chdir=$ROOT/*) args+=("-chdir=/ptf/${a#-chdir=$ROOT/}") ;;
+    *) args+=("$a") ;;
+  esac
+done
+exec docker run --rm \
+  -v "$ROOT:/ptf" \
+  -v "$HOME/.config/gcloud:/root/.config/gcloud:ro" \
+  -w /ptf hashicorp/terraform:1.9 "${args[@]}"

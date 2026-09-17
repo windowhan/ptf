@@ -47,24 +47,6 @@ cleanup() {
 }
 trap cleanup EXIT
 
-phase "wheels: runtime + example products"
-cd "$ROOT"
-rm -rf dist
-python -m build --wheel --outdir dist .
-python -m build --wheel --outdir dist examples/finite_example
-python -m build --wheel --outdir dist examples/continuous_example
-
-phase "images: build + push ($TAG)"
-gcloud auth configure-docker "$REGION-docker.pkg.dev" --quiet
-docker build --platform linux/amd64 -t "$REPO/runtime-e2e:$TAG" .
-docker build --platform linux/amd64 \
-  --build-arg "BASE=runtime-e2e:$TAG" \
-  -f scripts/e2e/Dockerfile.driver \
-  -t "$REPO/runtime-e2e-driver:$TAG" scripts/e2e
-docker push "$REPO/runtime-e2e:$TAG"
-docker push "$REPO/runtime-e2e-driver:$TAG"
-
-phase "terraform apply"
 # DEPLOYER (optional): IAM member allowed to actAs the control SA — needed
 # for Cloud Scheduler's oauth_token on the reconcile job. Full member
 # string, e.g. DEPLOYER="user:you@example.com".
@@ -77,7 +59,33 @@ TF_VARS=(
 if [[ -n "${DEPLOYER:-}" ]]; then
   TF_VARS+=(-var="deployer=$DEPLOYER")
 fi
+
+phase "wheels: runtime + example products"
+cd "$ROOT"
+rm -rf dist
+python -m build --wheel --outdir dist .
+python -m build --wheel --outdir dist examples/finite_example
+python -m build --wheel --outdir dist examples/continuous_example
+
+# The image push needs the Artifact Registry repository, which terraform
+# creates — bootstrap just that part first so the harness is self-contained
+# on a fresh project.
+phase "terraform apply (bootstrap: apis + iam + registry)"
 terraform -chdir="$ROOT/$ENV_DIR" init
+terraform -chdir="$ROOT/$ENV_DIR" apply -auto-approve "${TF_VARS[@]}" \
+  -target=module.apis -target=module.iam -target=module.registry
+
+phase "images: build + push ($TAG)"
+gcloud auth configure-docker "$REGION-docker.pkg.dev" --quiet
+docker build --platform linux/amd64 -t "$REPO/runtime-e2e:$TAG" .
+docker push "$REPO/runtime-e2e:$TAG"
+docker build --platform linux/amd64 \
+  --build-arg "BASE=$REPO/runtime-e2e:$TAG" \
+  -f scripts/e2e/Dockerfile.driver \
+  -t "$REPO/runtime-e2e-driver:$TAG" scripts/e2e
+docker push "$REPO/runtime-e2e-driver:$TAG"
+
+phase "terraform apply"
 terraform -chdir="$ROOT/$ENV_DIR" apply -auto-approve "${TF_VARS[@]}"
 
 phase "schema migration (in-VPC job)"
