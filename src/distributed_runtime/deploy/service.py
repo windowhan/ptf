@@ -207,38 +207,10 @@ async def run_control(
             asyncio.create_task(_forever("dispatcher", 1.0, lambda: dispatcher.cycle(send)))
         )
 
-    if continuous_registry is not None:
-        reconciler = Reconciler(
-            engine,
-            lease_seconds=config.lease_seconds,
-            stale_worker_seconds=config.stale_worker_seconds,
-        )
-        continuous_store = ContinuousStateStore(engine)
-        served = {
-            str(registration.name): registration
-            for registration in continuous_registry.workloads()
-            if isinstance(registration, ContinuousRegistration)
-        }
+    if continuous_registry is not None and config.reconciler_mode == "loop":
 
         async def reconcile_active() -> int:
-            deployments = await continuous_store.list_deployments([DeploymentStatus.ACTIVE])
-            count = 0
-            for deployment in deployments:
-                registration = served.get(str(deployment.workload_id))
-                if registration is None:
-                    continue
-                desired = await discover_partitions(registration.workload)
-                result = await reconciler.reconcile(deployment.deployment_id, desired)
-                count += 1
-                if result.assigned or result.reclaimed or result.dead_workers:
-                    logger.info(
-                        "reconcile %s: assigned=%d reclaimed=%d dead=%d",
-                        deployment.deployment_id,
-                        result.assigned,
-                        result.reclaimed,
-                        result.dead_workers,
-                    )
-            return count
+            return await reconcile_deployments(config, engine, continuous_registry)
 
         tasks.append(
             asyncio.create_task(_forever("reconciler", config.tick_seconds, reconcile_active))
@@ -247,6 +219,59 @@ async def run_control(
     if not tasks:
         raise RuntimeError("control role needs at least one app or a project")
     await asyncio.gather(*tasks)
+
+
+async def reconcile_deployments(
+    config: DeployConfig,
+    engine: StateEngine,
+    continuous_registry: RuntimeRegistry,
+) -> int:
+    """One convergence pass over every ACTIVE deployment.
+
+    Shared by the control loop (``reconciler_mode=loop``) and the one-shot
+    ``reconcile`` role that Cloud Scheduler invokes as a job.
+    """
+    reconciler = Reconciler(
+        engine,
+        lease_seconds=config.lease_seconds,
+        stale_worker_seconds=config.stale_worker_seconds,
+    )
+    continuous_store = ContinuousStateStore(engine)
+    served = {
+        str(registration.name): registration
+        for registration in continuous_registry.workloads()
+        if isinstance(registration, ContinuousRegistration)
+    }
+    deployments = await continuous_store.list_deployments([DeploymentStatus.ACTIVE])
+    count = 0
+    for deployment in deployments:
+        registration = served.get(str(deployment.workload_id))
+        if registration is None:
+            continue
+        desired = await discover_partitions(registration.workload)
+        result = await reconciler.reconcile(deployment.deployment_id, desired)
+        count += 1
+        if result.assigned or result.reclaimed or result.dead_workers:
+            logger.info(
+                "reconcile %s: assigned=%d reclaimed=%d dead=%d",
+                deployment.deployment_id,
+                result.assigned,
+                result.reclaimed,
+                result.dead_workers,
+            )
+    return count
+
+
+async def reconcile_once(
+    config: DeployConfig,
+    engine: StateEngine,
+    *,
+    continuous_registry: RuntimeRegistry | None,
+) -> int:
+    """One-shot reconcile for the ``reconcile`` job role — runs once, exits."""
+    if continuous_registry is None:
+        raise RuntimeError("reconcile role needs RUNTIME_CONTINUOUS_APP")
+    return await reconcile_deployments(config, engine, continuous_registry)
 
 
 def _pubsub_sender(

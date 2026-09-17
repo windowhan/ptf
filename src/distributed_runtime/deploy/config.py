@@ -67,6 +67,9 @@ class DeployConfig:
     tick_seconds: float
     heartbeat_seconds: float
     poll_seconds: float
+    # "loop": reconciler runs inside the control service.
+    # "off": an external trigger (Cloud Scheduler job) drives reconcile.
+    reconciler_mode: str = "loop"
 
     @classmethod
     def from_env(cls) -> DeployConfig:
@@ -96,6 +99,7 @@ class DeployConfig:
             tick_seconds=float(_env("RUNTIME_TICK_SECONDS", "5") or "5"),
             heartbeat_seconds=float(_env("RUNTIME_HEARTBEAT_SECONDS", "15") or "15"),
             poll_seconds=float(_env("RUNTIME_POLL_SECONDS", "5") or "5"),
+            reconciler_mode=_env("RUNTIME_CONTROL_RECONCILER", "loop") or "loop",
         )
 
 
