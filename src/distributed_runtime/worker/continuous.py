@@ -9,6 +9,7 @@ stale owner's writes are rejected by the fencing check inside emit().
 from __future__ import annotations
 
 import asyncio
+import logging
 from dataclasses import dataclass
 
 from distributed_runtime.continuous import (
@@ -20,6 +21,7 @@ from distributed_runtime.continuous import (
 )
 from distributed_runtime.core.enums import PartitionStatus, WorkloadMode
 from distributed_runtime.core.envelope import VersionedEnvelope
+from distributed_runtime.core.errors import InvariantViolationError
 from distributed_runtime.core.identifiers import (
     DeploymentId,
     PartitionId,
@@ -29,6 +31,8 @@ from distributed_runtime.core.lifecycle import CancellationSource
 from distributed_runtime.registry import ContinuousRegistration, RuntimeRegistry
 from distributed_runtime.state.continuous import ContinuousStateStore
 from distributed_runtime.state.engine import StateEngine
+
+logger = logging.getLogger("distributed_runtime.worker.continuous")
 
 
 class _StoreSink:
@@ -116,7 +120,9 @@ class ContinuousSupervisor:
                 current is not None and current.fencing_token != running.lease.fencing_token
             )
             if current is None or token_moved or running.task.done():
-                if not running.task.done():
+                if running.task.done():
+                    self._log_task_result(partition_id, running.task)
+                else:
                     running.cancellation.cancel("ownership lost")
                     running.task.cancel()
                 del self._running[partition_id]
@@ -158,11 +164,39 @@ class ContinuousSupervisor:
 
         return len(self._running)
 
-    async def stop_all(self) -> None:
-        """Cancel every running partition and wait for tasks."""
+    @staticmethod
+    def _log_task_result(partition_id: PartitionId, task: asyncio.Task[None]) -> None:
+        """Retrieve a finished task's outcome so exceptions are not lost.
+
+        A fencing rejection is the expected end of a stale owner's task;
+        anything else is a real failure worth a warning.
+        """
+        if task.cancelled():
+            return
+        exc = task.exception()
+        if exc is None:
+            return
+        if isinstance(exc, InvariantViolationError):
+            logger.info("partition %s fenced out — %s", partition_id, exc)
+        else:
+            logger.warning("partition %s task failed", partition_id, exc_info=exc)
+
+    async def stop_all(self, grace_seconds: float = 5.0) -> None:
+        """Signal cancellation, wait ``grace_seconds``, then force-cancel.
+
+        The cancellation token is cooperative — a workload parked in a
+        long sleep would not notice it — so stragglers get a hard
+        ``task.cancel()`` after the grace window. Cooperative tasks still
+        get to finish in-flight work; shutdown stays bounded for those
+        that do not.
+        """
         for running in self._running.values():
             running.cancellation.cancel("supervisor stopping")
         tasks = [r.task for r in self._running.values()]
         if tasks:
-            await asyncio.gather(*tasks, return_exceptions=True)
+            _, pending = await asyncio.wait(tasks, timeout=grace_seconds)
+            for task in pending:
+                task.cancel()
+            if pending:
+                await asyncio.gather(*pending, return_exceptions=True)
         self._running.clear()

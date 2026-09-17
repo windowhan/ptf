@@ -19,6 +19,7 @@ from distributed_runtime.control.planner import PlannerRunner
 from distributed_runtime.control.reconciler import Reconciler
 from distributed_runtime.core.enums import DeploymentStatus
 from distributed_runtime.core.identifiers import (
+    DeploymentId,
     RevisionId,
     RuntimeInstanceId,
 )
@@ -100,15 +101,8 @@ async def run_worker(
         if subscription and config.project:
             tasks.append(asyncio.create_task(_consume_dispatches(config, worker, subscription)))
 
-    supervisors: list[ContinuousSupervisor] = []
+    supervisors: dict[DeploymentId, ContinuousSupervisor] = {}
     if continuous_registry is not None:
-        supervisor = ContinuousSupervisor(
-            registry=continuous_registry,
-            engine=engine,
-            instance_id=instance_id,
-            lease_seconds=config.lease_seconds,
-        )
-        supervisors.append(supervisor)
         store = ContinuousStateStore(engine)
         served = {
             str(registration.name)
@@ -117,13 +111,28 @@ async def run_worker(
         }
 
         async def supervise() -> int:
+            # One supervisor per deployment: partition ids are only unique
+            # within a deployment, so sharing a supervisor lets one
+            # deployment's tick reap another's tasks on id collisions.
             deployments = await store.list_deployments(
                 [DeploymentStatus.ACTIVE, DeploymentStatus.DRAINING]
             )
+            active = {d.deployment_id for d in deployments if str(d.workload_id) in served}
+            for deployment_id in list(supervisors):
+                if deployment_id not in active:
+                    await supervisors.pop(deployment_id).stop_all()
             running = 0
             for deployment in deployments:
-                if str(deployment.workload_id) not in served:
+                if deployment.deployment_id not in active:
                     continue
+                supervisor = supervisors.get(deployment.deployment_id)
+                if supervisor is None:
+                    supervisor = supervisors[deployment.deployment_id] = ContinuousSupervisor(
+                        registry=continuous_registry,
+                        engine=engine,
+                        instance_id=instance_id,
+                        lease_seconds=config.lease_seconds,
+                    )
                 running += await supervisor.tick(deployment.deployment_id)
             return running
 
@@ -132,7 +141,7 @@ async def run_worker(
     try:
         await asyncio.gather(*tasks)
     finally:
-        for supervisor in supervisors:
+        for supervisor in supervisors.values():
             await supervisor.stop_all()
 
 

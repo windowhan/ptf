@@ -195,6 +195,72 @@ def test_worker_supervises_and_control_reconciles_continuous(clean_state: str) -
 
 
 @requires_postgres
+def test_same_partition_id_across_deployments_runs_concurrently(
+    clean_state: str,
+) -> None:
+    """Partition ids are unique per deployment — one supervisor per deployment.
+
+    Two deployments both owning ``p-0`` must run their partition tasks at
+    the same time. A supervisor shared across deployments keys tasks by
+    partition id alone and ping-pongs: each deployment's tick reaps the
+    other's task as a fencing-token mismatch.
+    """
+    from collections.abc import Sequence
+
+    from distributed_runtime import RuntimeApplication
+    from distributed_runtime.continuous import Partition, PartitionContext
+    from distributed_runtime.core import PartitionId, WorkloadMode
+
+    state = {"running": 0, "max": 0}
+
+    class BlockingStream:
+        name = "block.stream"
+        version = "1.0.0"
+        mode = WorkloadMode.CONTINUOUS
+
+        async def discover_partitions(self) -> Sequence[Partition]:
+            return [Partition(partition_id=PartitionId("p-0"), payload={})]
+
+        async def run_partition(self, context: PartitionContext, partition: Partition) -> None:
+            state["running"] += 1
+            state["max"] = max(state["max"], state["running"])
+            try:
+                await asyncio.sleep(3600)
+            finally:
+                state["running"] -= 1
+
+    async def exercise() -> int:
+        engine = await StateEngine.connect(clean_state)
+        await migrate(engine)
+        app = RuntimeApplication("example-product")
+        app.registry.register_continuous(
+            name="block.stream",
+            semantic_version="1.0.0",
+            execution_class="stateful-stream",
+            workload=BlockingStream(),
+        )
+        config = _config(clean_state)
+        admin = ContinuousAdmin(engine, application="example-product")
+        control, worker = _with_loops(config, engine, continuous=app.registry)
+        try:
+            await admin.deploy(workload="block.stream", version="1.0.0")
+            await admin.deploy(workload="block.stream", version="1.0.0")
+
+            async def concurrent() -> int:
+                return max(0, state["max"] - 1)  # truthy once two tasks overlap
+
+            await _until(concurrent)
+            return state["max"]
+        finally:
+            for task in (control, worker):
+                task.cancel()
+            await asyncio.gather(control, worker, return_exceptions=True)
+            await engine.close()
+
+    assert asyncio.run(exercise()) == 2
+
+
+@requires_postgres
 def test_main_entrypoint_migrate_and_health(
     monkeypatch: pytest.MonkeyPatch, clean_state: str
 ) -> None:
