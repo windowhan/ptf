@@ -60,8 +60,9 @@ scripts/e2e/run_gcp_e2e.sh <project-id> [region] [scenarios]
 2. `Dockerfile`로 runtime 이미지를, `Dockerfile.driver`로 driver
    이미지를 만들어 Artifact Registry에 push한다.
 3. terraform apply에 `worker_image`/`control_image`/`driver_image`
-   변수로 실제 이미지를 전달한다. `DEPLOYER_SA`를 넘기면 Scheduler가
-   control SA로 oauth_token을 발급할 수 있게 `actAs`를 부여한다.
+   변수로 실제 이미지를 전달한다. `DEPLOYER`(전체 IAM member 문자열,
+   예 `user:you@example.com`)를 넘기면 Scheduler가 control SA로
+   oauth_token을 발급할 수 있게 `actAs`를 부여한다.
 4. migration job을 실행해 schema를 적용한다.
 5. driver job을 실행한다. `RUNTIME_E2E_SCENARIOS`로 시나리오를
    필터할 수 있다 (기본 전부).

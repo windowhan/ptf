@@ -56,7 +56,8 @@ variable "extra_pool_revisions" {
 }
 # Deployer identity allowed to act as the control service account — Cloud
 # Scheduler's oauth_token requires iam.serviceAccounts.actAs at creation.
-variable "deployer_sa" {
+# Full IAM member string: "user:you@example.com" or "serviceAccount:…".
+variable "deployer" {
   type    = string
   default = ""
 }
@@ -81,7 +82,7 @@ module "network" {
 module "iam" {
   source         = "../../modules/iam"
   project        = var.project
-  control_act_as = var.deployer_sa == "" ? [] : ["serviceAccount:${var.deployer_sa}"]
+  control_act_as = var.deployer == "" ? [] : [var.deployer]
   depends_on     = [module.apis]
 }
 

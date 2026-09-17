@@ -65,16 +65,17 @@ docker push "$REPO/runtime-e2e:$TAG"
 docker push "$REPO/runtime-e2e-driver:$TAG"
 
 phase "terraform apply"
-# DEPLOYER_SA (optional): a service account allowed to actAs the control SA
-# — required for Cloud Scheduler's oauth_token on the reconcile job.
+# DEPLOYER (optional): IAM member allowed to actAs the control SA — needed
+# for Cloud Scheduler's oauth_token on the reconcile job. Full member
+# string, e.g. DEPLOYER="user:you@example.com".
 TF_VARS=(
   -var="project=$PROJECT" -var="region=$REGION"
   -var="worker_image=$REPO/runtime-e2e:$TAG"
   -var="control_image=$REPO/runtime-e2e:$TAG"
   -var="driver_image=$REPO/runtime-e2e-driver:$TAG"
 )
-if [[ -n "${DEPLOYER_SA:-}" ]]; then
-  TF_VARS+=(-var="deployer_sa=$DEPLOYER_SA")
+if [[ -n "${DEPLOYER:-}" ]]; then
+  TF_VARS+=(-var="deployer=$DEPLOYER")
 fi
 terraform -chdir="$ROOT/$ENV_DIR" init
 terraform -chdir="$ROOT/$ENV_DIR" apply -auto-approve "${TF_VARS[@]}"
