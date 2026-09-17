@@ -301,11 +301,17 @@ class FiniteStateStore:
         *,
         limit: int = 1,
         claim_grace_seconds: int = 120,
+        required_revision: RevisionId | None = None,
     ) -> tuple[ClaimedUnit, ...]:
         """Claim due units via SKIP LOCKED; returns units this owner holds.
 
         Claim expiry uses the database clock plus the unit's own
         timeout_seconds and the shared grace window.
+
+        ``required_revision`` restricts claims to runs pinned to that
+        execution revision — the poll path's counterpart to the Pub/Sub
+        subscription filter, so a pool cannot steal another revision's
+        work by polling the store directly.
         """
         async with self._engine.acquire() as connection, connection.transaction():
             rows = await connection.fetch(
@@ -323,11 +329,15 @@ class FiniteStateStore:
                             FROM runtime_state.finite_plan_units g
                             WHERE g.run_id = u.run_id
                               AND g.unit_key = u.unit_key)
+                        JOIN runtime_state.finite_runs r
+                          ON r.run_id = u.run_id
                         WHERE u.status IN ('ready', 'retry_scheduled')
                           AND (u.next_attempt_at IS NULL
                                OR u.next_attempt_at <= now())
                           AND (u.claim_expires_at IS NULL
                                OR u.claim_expires_at < now())
+                          AND ($4::text IS NULL
+                               OR r.execution_revision = $4)
                         ORDER BY u.next_attempt_at NULLS FIRST, u.unit_key
                         LIMIT $2
                         FOR UPDATE OF u SKIP LOCKED
@@ -349,6 +359,7 @@ class FiniteStateStore:
                 str(owner),
                 limit,
                 claim_grace_seconds,
+                None if required_revision is None else str(required_revision),
             )
         claimed: list[ClaimedUnit] = []
         for row in rows:

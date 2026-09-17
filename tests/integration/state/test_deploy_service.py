@@ -52,7 +52,7 @@ def _config(dsn: str) -> DeployConfig:
     return DeployConfig(
         dsn=dsn,
         project="",
-        pool_revision="local",
+        pool_revision="rev:1",  # must match the client's pinned revision
         instance_id=f"instance:svc-{uuid.uuid4().hex[:8]}",
         pubsub_subscription=None,
         dispatch_topic="runtime-unit-dispatch",

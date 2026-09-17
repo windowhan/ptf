@@ -8,21 +8,25 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import AsyncIterator, Mapping
+from datetime import UTC, datetime, timedelta
 
 from distributed_runtime import RuntimeApplication
 from distributed_runtime.control.client import RuntimeClient
 from distributed_runtime.control.dispatcher import OutboxDispatcher
 from distributed_runtime.control.planner import PlannerRunner
 from distributed_runtime.core import (
+    ExecutionStatus,
     FinitePolicy,
     JsonValue,
     PermanentExecutionError,
+    RateLimitedExecutionError,
     RetryableExecutionError,
     RevisionId,
     RunStatus,
     RuntimeInstanceId,
     WorkloadMode,
 )
+from distributed_runtime.core.envelope import VersionedEnvelope
 from distributed_runtime.finite import ExecutionContext, ExecutionUnit, WorkloadRequest
 from distributed_runtime.state import StateEngine, migrate
 from distributed_runtime.state.finite import FiniteStateStore
@@ -344,6 +348,296 @@ def test_dispatcher_enqueues_due_retries(clean_state: str) -> None:
             # control plane's own pool revision
             assert retry.envelope.runtime_pool_revision == "rev:1"
             return cycle.retries_enqueued
+        finally:
+            await engine.close()
+
+    assert asyncio.run(exercise()) == 1
+
+
+@requires_postgres
+def test_poll_respects_run_pinned_revision(clean_state: str) -> None:
+    """Pools only claim runs pinned to their own execution revision.
+
+    The Pub/Sub subscription filter stops wrong-revision wakeups; this
+    test covers the store-side poll path reaching the same guarantee.
+    """
+
+    async def exercise() -> tuple[tuple[str, ...], tuple[str, ...]]:
+        engine, client, planner, _ = await _setup(clean_state)
+        try:
+            app = _app()
+            client_old = RuntimeClient(
+                engine,
+                application="example-product",
+                planner_revision=RevisionId("rev:1"),
+                execution_revision=RevisionId("rev:old"),
+            )
+            run_new = await client.submit(
+                workload="range.sum",
+                version="1.0.0",
+                input={"start": 0, "end": 10},
+            )
+            run_old = await client_old.submit(
+                workload="range.sum",
+                version="1.0.0",
+                input={"start": 0, "end": 10},
+            )
+            await planner.plan(run_new.run_id)
+            await planner.plan(run_old.run_id)
+
+            stranger = FiniteWorker(
+                registry=app.registry,
+                engine=engine,
+                instance_id=RuntimeInstanceId("instance:w-x"),
+                pool_revision=RevisionId("rev:other"),
+            )
+            assert await stranger.poll_once(limit=10) == ()
+
+            worker_old = FiniteWorker(
+                registry=app.registry,
+                engine=engine,
+                instance_id=RuntimeInstanceId("instance:w-old"),
+                pool_revision=RevisionId("rev:old"),
+            )
+            old_handled = await worker_old.poll_once(limit=10)
+
+            worker_new = FiniteWorker(
+                registry=app.registry,
+                engine=engine,
+                instance_id=RuntimeInstanceId("instance:w-1"),
+                pool_revision=RevisionId("rev:1"),
+            )
+            new_handled = await worker_new.poll_once(limit=10)
+            return (
+                tuple(str(h.run_id) for h in old_handled),
+                tuple(str(h.run_id) for h in new_handled),
+            )
+        finally:
+            await engine.close()
+
+    old_handled, new_handled = asyncio.run(exercise())
+    # rev:old pool got exactly run_old's two units; rev:1 pool run_new's
+    assert len(old_handled) == 2 and len(new_handled) == 2
+    assert len(set(old_handled)) == 1 and len(set(new_handled)) == 1
+    assert old_handled[0] != new_handled[0]
+
+
+@requires_postgres
+def test_rate_limited_retry_waits_for_retry_after_floor(clean_state: str) -> None:
+    """rate_limited outcomes hold the unit until retry_after elapses."""
+    calls: list[int] = []
+
+    async def limited(context: ExecutionContext, payload: Mapping[str, JsonValue]) -> JsonValue:
+        calls.append(1)
+        if len(calls) == 1:
+            raise RateLimitedExecutionError("quota", retry_after=timedelta(seconds=90))
+        return {"ok": True}
+
+    class SinglePlanner:
+        name = "single.unit"
+        version = "1.0.0"
+        mode = WorkloadMode.FINITE
+
+        async def __call__(self, request: WorkloadRequest) -> AsyncIterator[ExecutionUnit]:
+            yield ExecutionUnit(
+                unit_key="u:1",
+                handler="limited",
+                payload={},
+                execution_class="lightweight",
+                timeout_seconds=30,
+                max_attempts=3,
+            )
+
+    async def exercise() -> ExecutionStatus:
+        engine = await StateEngine.connect(clean_state)
+        await migrate(engine)
+        try:
+            app = RuntimeApplication("example-product")
+            app.registry.register_finite(
+                name="single.unit",
+                semantic_version="1.0.0",
+                execution_class="lightweight",
+                planner=SinglePlanner(),
+                handler=limited,
+            )
+            client = RuntimeClient(
+                engine,
+                application="example-product",
+                planner_revision=RevisionId("rev:1"),
+                execution_revision=RevisionId("rev:1"),
+            )
+            planner = PlannerRunner(
+                registry=app.registry,
+                engine=engine,
+                dispatch_topic="runtime-units",
+                application="example-product",
+            )
+            worker = FiniteWorker(
+                registry=app.registry,
+                engine=engine,
+                instance_id=RuntimeInstanceId("instance:w-0"),
+            )
+            submitted = await client.submit(
+                workload="single.unit",
+                version="1.0.0",
+                input={},
+            )
+            await planner.plan(submitted.run_id)
+
+            (first,) = await worker.poll_once(limit=1)
+            assert first.outcome == "rate_limited"
+            # floor is 90s out — an immediate repoll must claim nothing
+            assert await worker.poll_once(limit=1) == ()
+
+            store = FiniteStateStore(engine)
+            (state,) = await store.unit_states(submitted.run_id)
+            assert state.status == ExecutionStatus.RETRY_SCHEDULED
+
+            # once the floor elapses the retry lands and succeeds
+            async with engine.acquire() as connection:
+                await connection.execute(
+                    """
+                    UPDATE runtime_state.finite_units
+                    SET next_attempt_at = now() - interval '1 second'
+                    WHERE run_id = $1
+                    """,
+                    str(submitted.run_id),
+                )
+            (second,) = await worker.poll_once(limit=1)
+            assert second.outcome == "succeeded"
+            (state,) = await store.unit_states(submitted.run_id)
+            assert state.attempt_count == 2
+            return state.status
+        finally:
+            await engine.close()
+
+    assert asyncio.run(exercise()) is ExecutionStatus.SUCCEEDED
+
+
+@requires_postgres
+def test_timeout_counts_as_retryable_then_succeeds(clean_state: str) -> None:
+    """A unit exceeding timeout_seconds is retried, not abandoned."""
+    calls: list[int] = []
+
+    async def slow(context: ExecutionContext, payload: Mapping[str, JsonValue]) -> JsonValue:
+        calls.append(1)
+        if len(calls) == 1:
+            await asyncio.sleep(5)  # past the unit's 1s timeout
+        return {"ok": True}
+
+    class TimeoutPlanner:
+        name = "timeout.unit"
+        version = "1.0.0"
+        mode = WorkloadMode.FINITE
+
+        async def __call__(self, request: WorkloadRequest) -> AsyncIterator[ExecutionUnit]:
+            yield ExecutionUnit(
+                unit_key="u:1",
+                handler="slow",
+                payload={},
+                execution_class="lightweight",
+                timeout_seconds=1,
+                max_attempts=2,
+            )
+
+    async def exercise() -> int:
+        engine = await StateEngine.connect(clean_state)
+        await migrate(engine)
+        try:
+            app = RuntimeApplication("example-product")
+            app.registry.register_finite(
+                name="timeout.unit",
+                semantic_version="1.0.0",
+                execution_class="lightweight",
+                planner=TimeoutPlanner(),
+                handler=slow,
+            )
+            client = RuntimeClient(
+                engine,
+                application="example-product",
+                planner_revision=RevisionId("rev:1"),
+                execution_revision=RevisionId("rev:1"),
+            )
+            planner = PlannerRunner(
+                registry=app.registry,
+                engine=engine,
+                dispatch_topic="runtime-units",
+                application="example-product",
+            )
+            worker = FiniteWorker(
+                registry=app.registry,
+                engine=engine,
+                instance_id=RuntimeInstanceId("instance:w-0"),
+            )
+            submitted = await client.submit(
+                workload="timeout.unit",
+                version="1.0.0",
+                input={},
+            )
+            await planner.plan(submitted.run_id)
+
+            (first,) = await worker.poll_once(limit=1)
+            assert first.outcome == "retryable"
+
+            store = FiniteStateStore(engine)
+            async with engine.acquire() as connection:
+                await connection.execute(
+                    """
+                    UPDATE runtime_state.finite_units
+                    SET next_attempt_at = now() - interval '1 second'
+                    WHERE run_id = $1
+                    """,
+                    str(submitted.run_id),
+                )
+            (second,) = await worker.poll_once(limit=1)
+            assert second.outcome == "succeeded"
+            (state,) = await store.unit_states(submitted.run_id)
+            return state.attempt_count
+        finally:
+            await engine.close()
+
+    assert asyncio.run(exercise()) == 2
+
+
+@requires_postgres
+def test_duplicate_dispatch_is_a_noop(clean_state: str) -> None:
+    """Republished wakeup for a finished unit changes nothing."""
+
+    async def exercise() -> int:
+        engine, client, planner, worker = await _setup(clean_state)
+        try:
+            submitted = await client.submit(
+                workload="range.sum",
+                version="1.0.0",
+                input={"start": 0, "end": 5},
+            )
+            await planner.plan(submitted.run_id)
+            (handled,) = await worker.poll_once(limit=1)
+            assert handled.outcome == "succeeded"
+
+            duplicate = VersionedEnvelope(
+                schema_version=1,
+                message_kind="unit.dispatch",
+                run_id=str(submitted.run_id),
+                execution_id="exec:dup",
+                idempotency_key="range:0-5",
+                application="example-product",
+                workload="range.sum",
+                workload_version="1.0.0",
+                handler="range_sum.partial",
+                attempt_generation=1,
+                execution_class="lightweight",
+                runtime_pool_revision="rev:1",
+                published_at=datetime.now(UTC).isoformat(),
+                payload={"unit_key": "range:0-5"},
+            )
+            # at-least-once redelivery: claim misses, nothing re-runs
+            assert await worker.handle_envelope(duplicate) is None
+
+            store = FiniteStateStore(engine)
+            (state,) = await store.unit_states(submitted.run_id)
+            assert state.status == ExecutionStatus.SUCCEEDED
+            return state.attempt_count
         finally:
             await engine.close()
 

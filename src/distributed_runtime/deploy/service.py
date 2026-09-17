@@ -86,6 +86,7 @@ async def run_worker(
             registry=finite_registry,
             engine=engine,
             instance_id=instance_id,
+            pool_revision=RevisionId(config.pool_revision),
         )
 
         async def poll() -> int:

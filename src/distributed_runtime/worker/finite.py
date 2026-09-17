@@ -18,6 +18,7 @@ from distributed_runtime.core.enums import WorkloadMode
 from distributed_runtime.core.envelope import JsonValue, VersionedEnvelope
 from distributed_runtime.core.identifiers import (
     ExecutionId,
+    RevisionId,
     RunId,
     RuntimeInstanceId,
 )
@@ -55,12 +56,14 @@ class FiniteWorker:
         instance_id: RuntimeInstanceId,
         policy: FinitePolicy | None = None,
         application: str = "",
+        pool_revision: RevisionId | None = None,
     ) -> None:
         self._registry = registry
         self._store = FiniteStateStore(engine)
         self._instance_id = instance_id
         self._policy = FinitePolicy() if policy is None else policy
         self._application = application or registry.application
+        self._pool_revision = pool_revision
 
     async def handle_envelope(self, envelope: VersionedEnvelope) -> HandledUnit | None:
         """Claim the named unit and run one attempt. None = nothing claimed."""
@@ -80,11 +83,17 @@ class FiniteWorker:
         return await self.execute_claimed(claimed)
 
     async def poll_once(self, *, limit: int = 1) -> tuple[HandledUnit, ...]:
-        """Claim and execute up to ``limit`` due units — no Pub/Sub needed."""
+        """Claim and execute up to ``limit`` due units — no Pub/Sub needed.
+
+        The store-side ``required_revision`` keeps polling honest: a pool
+        only picks up runs pinned to its own execution revision, matching
+        the Pub/Sub subscription filter on the wakeup path.
+        """
         claimed = await self._store.claim_units(
             self._instance_id,
             limit=limit,
             claim_grace_seconds=self._policy.claim_grace_seconds,
+            required_revision=self._pool_revision,
         )
         results: list[HandledUnit] = []
         for unit in claimed:
