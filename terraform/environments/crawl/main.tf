@@ -144,27 +144,28 @@ resource "google_project_iam_member" "worker_logging" {
 }
 
 locals {
-  # COS has no package manager — run tailscaled from static binaries on the
-  # persistent /var/lib partition. The daemon runs on the host so the worker
-  # container (--network host) reaches the tailnet directly.
+  # COS mounts /var noexec — host binaries can't run, so tailscaled runs as
+  # the official container in kernel mode (TS_USERSPACE=false + /dev/net/tun).
+  # --network host puts tailscale0 in the host netns, so the worker
+  # container (also --network host) reaches the tailnet with no extra setup.
+  # State lives on the persistent /var/lib dir so a container restart keeps
+  # the same tailnet node; a spot recreate gets a new node anyway.
   tailscale_prelude = <<-EOT
-    TS_DIR=/var/lib/tailscale
-    if [ ! -x "$TS_DIR/tailscaled" ]; then
-      mkdir -p "$TS_DIR"
-      curl -fsSL "https://pkgs.tailscale.com/stable/tailscale_${var.tailscale_version}_amd64.tgz" \
-        | tar -xz -C "$TS_DIR" --strip-components=1
-    fi
-    mkdir -p "$TS_DIR/state"
-    (nohup "$TS_DIR/tailscaled" --statedir="$TS_DIR/state" >/var/log/tailscaled.log 2>&1 &)
+    docker pull "tailscale/tailscale:v${var.tailscale_version}"
+    docker rm -f tailscaled 2>/dev/null || true
+    mkdir -p /var/lib/tailscale-state
+    docker run -d --name tailscaled --restart unless-stopped \
+      --network host --device /dev/net/tun --cap-add NET_ADMIN \
+      -e TS_AUTHKEY -e TS_AUTH_ONCE=true -e TS_USERSPACE=false \
+      -e TS_STATE_DIR=/var/lib/tailscale \
+      -e TS_HOSTNAME="crawl-$(hostname | cut -d. -f1)" \
+      -v /var/lib/tailscale-state:/var/lib/tailscale \
+      "tailscale/tailscale:v${var.tailscale_version}"
     for i in $(seq 1 30); do
-      if "$TS_DIR/tailscale" up \
-          --authkey="$TAILSCALE_AUTH_KEY" \
-          --hostname="crawl-$(hostname | cut -d. -f1)"; then
-        break
-      fi
+      docker exec tailscaled tailscale status 2>/dev/null | grep -q '100\.' && break
       sleep 2
     done
-    "$TS_DIR/tailscale" status || true
+    docker exec tailscaled tailscale status || true
   EOT
 }
 
@@ -192,7 +193,9 @@ module "workers" {
     RUNTIME_DSN = "${google_secret_manager_secret.worker_dsn.id}/versions/latest"
   }
   secret_shell = {
-    TAILSCALE_AUTH_KEY = "${google_secret_manager_secret.tailscale_auth_key.id}/versions/latest"
+    # Exported into the boot shell only — the tailscaled container picks it
+    # up via bare `-e TS_AUTHKEY`; never reaches the worker container.
+    TS_AUTHKEY = "${google_secret_manager_secret.tailscale_auth_key.id}/versions/latest"
   }
   startup_prelude = local.tailscale_prelude
   depends_on      = [google_project_service.apis]

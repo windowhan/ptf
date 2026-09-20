@@ -13,10 +13,12 @@ Tailscale 오버레이로 DB에 붙는다 — Cloud SQL / Pub/Sub / 전용 VPC
 
 ## 워커가 하는 일 (부팅 시)
 
-1. Secret Manager에서 `TAILSCALE_AUTH_KEY`와 `RUNTIME_DSN`을
+1. Secret Manager에서 `TS_AUTHKEY`와 `RUNTIME_DSN`을
    instance SA 토큰으로 가져온다.
-2. COS에 tailscale static 바이너리를 깔고 `tailscale up` — 호스트
-   데몬이라 `--network host` 컨테이너가 tailnet을 직접 탄다.
+2. `tailscale/tailscale` 컨테이너를 kernel 모드(`TS_USERSPACE=false`)
+   + `--network host`로 띄운다 — COS는 /var가 noexec이라 호스트
+   바이너리 실행이 안 되며, 컨테이너 tailscaled가 만든 tailscale0를
+   같은 host netns의 워커 컨테이너가 그대로 공유한다.
 3. `python -m distributed_runtime worker` 실행 — DB 폴링으로
    `execution_revision=crawl`인 unit만 claim한다.
 
@@ -48,20 +50,23 @@ echo -n 'postgresql://postgres:postgres@100.x.x.x:55432/runtime' \
 ```bash
 python -m build --wheel && (cd examples/crawler_example && python -m build --wheel)
 cp examples/crawler_example/dist/*.whl dist/
-docker build -t us-central1-docker.pkg.dev/<project>/runtime/crawl-worker:TAG .
-docker push ...
+# GCE는 amd64 — Apple Silicon에서 docker build만 하면 arm64 이미지가
+# push돼 "no matching manifest for linux/amd64"로 pull이 실패한다.
+docker buildx build --platform linux/amd64 \
+  -t us-central1-docker.pkg.dev/<project>/runtime/crawl-worker:TAG --push .
 ```
 
 ## 실행
 
-맥에서 control만 띄우고 (planner가 run을 unit으로 쪼갬), run은
+맥에서 control만 띄우고 (planner가 run을 unit으로 쪼갬 — pending run은
+revision과 무관하게 어떤 control이든 plan한다), run은
 `execution_revision="crawl"`로 제출:
 
 ```python
 client = RuntimeClient(
     engine, application="crawler-product",
-    planner_revision=RevisionId("crawl"),
-    execution_revision=RevisionId("crawl"),
+    planner_revision=RevisionId("local"),   # 메타데이터일 뿐 필터 아님
+    execution_revision=RevisionId("crawl"), # claim 게이트 — 여기가 실제 핀
 )
 run = await client.submit(workload="crawl.fetch", version="1.0.0",
                           input={"urls": [...]})

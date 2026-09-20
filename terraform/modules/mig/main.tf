@@ -90,12 +90,15 @@ locals {
   secret_helper = length(local.all_secrets) == 0 ? "" : <<-EOT2
     fetch_secret() {
       for i in $(seq 1 10); do
+        # googleapis responses are pretty-printed multi-line JSON — sed -n
+        # must drop non-matching lines or raw JSON reaches base64.
         V=$(curl -sf -H "Authorization: Bearer $TOKEN" \
           "https://secretmanager.googleapis.com/v1/$1:access" \
-          | sed -E 's/.*"data": ?"([^"]+)".*/\1/' | base64 -d)
+          | sed -nE 's/.*"data": *"([^"]+)".*/\1/p' | base64 -d)
         if [ -n "$V" ]; then echo "$V"; return 0; fi
         sleep 3
       done
+      echo "fetch_secret failed for $1" >&2
       return 1
     }
   EOT2
@@ -113,7 +116,7 @@ locals {
     for i in $(seq 1 30); do
       TOKEN=$(curl -s -H "Metadata-Flavor: Google" \
         http://metadata.google.internal/computeMetadata/v1/instance/service-accounts/default/token \
-        | sed -E 's/.*"access_token": ?"([^"]+)".*/\1/')
+        | sed -nE 's/.*"access_token": *"([^"]+)".*/\1/p')
       if [ -n "$TOKEN" ] && echo "$TOKEN" | docker login -u oauth2accesstoken \
         --password-stdin "https://${local.registry_host}"; then
         break
